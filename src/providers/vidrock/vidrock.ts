@@ -1,0 +1,202 @@
+import { BaseProvider } from '@omss/framework';
+import type { ProviderCapabilities, ProviderMediaObject, ProviderResult, Source, Subtitle } from '@omss/framework';
+import axios from 'axios';
+import { encryptItemId } from './encrypt.js';
+import { VidrockStreams, VidrockCDN } from './vidrock.types.js';
+
+const PROXY_PREFIX = 'https://proxy.vidrock.store/';
+
+export class VidRockProvider extends BaseProvider {
+    readonly id = 'vidrock';
+    readonly name = 'VidRock';
+    readonly enabled = true;
+    readonly BASE_URL = 'https://vidrock.net/';
+    readonly SUB_BASE_URL = 'https://sub.vdrk.site';
+    readonly HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36',
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9',
+        Referer: this.BASE_URL,
+        Origin: this.BASE_URL,
+    };
+
+    readonly capabilities: ProviderCapabilities = {
+        supportedContentTypes: ['movies', 'tv'],
+    };
+
+    async getMovieSources(media: ProviderMediaObject): Promise<ProviderResult> {
+        return this.getSources(media);
+    }
+
+    async getTVSources(media: ProviderMediaObject): Promise<ProviderResult> {
+        return this.getSources(media);
+    }
+
+    private async getSources(media: ProviderMediaObject): Promise<ProviderResult> {
+        try {
+            const pageUrl = await this.buildUrl(media);
+            const data = await this.fetchPage(pageUrl);
+
+            if (!data) {
+                return this.emptyResult('Failed to fetch page');
+            }
+
+            const resp = data as unknown as VidrockStreams;
+
+            const sources: Source[] = [];
+
+            // SOURCES LOGIC (UNCHANGED)
+            for (const [_, stream] of Object.entries(resp)) {
+                if (!stream?.url) continue;
+
+                let finalUrl: string;
+
+                if (stream.url.startsWith('https://cdn.vidrock.store/')) {
+                    const secondData = (await this.fetchPage(stream.url)) as unknown as VidrockCDN[];
+                    if (!secondData) continue;
+
+                    secondData.forEach((obj) => {
+                        if (obj.url.startsWith(PROXY_PREFIX)) {
+                            const encodedPath = obj.url.slice(PROXY_PREFIX.length);
+                            finalUrl = decodeURIComponent(encodedPath.replace(/^\//, ''));
+                        } else {
+                            // Fallback: if format changes, still return proxied URL
+                            finalUrl = obj.url;
+                        }
+
+                        sources.push({
+                            url: this.createProxyUrl(finalUrl, { ...this.HEADERS, Referer: 'https://lok-lok.cc/', Origin: 'https://lok-lok.cc/' }),
+                            quality: obj.resolution + 'p',
+                            audioTracks: [
+                                {
+                                    language: stream.language === 'English' ? 'eng' : 'unknown',
+                                    label: stream.language ?? 'Unknown',
+                                },
+                            ],
+                            provider: { id: this.id, name: this.name },
+                        } as Source);
+                    });
+
+                    continue;
+                } else {
+                    finalUrl = this.createProxyUrl(stream.url, { ...this.HEADERS, Referer: pageUrl });
+                }
+
+                sources.push({
+                    url: finalUrl,
+                    quality: 'up to HD',
+                    audioTracks: [
+                        {
+                            language: stream.language === 'English' ? 'eng' : 'unknown',
+                            label: stream.language ?? 'Unknown',
+                        },
+                    ],
+                    provider: { id: this.id, name: this.name },
+                } as Source);
+            }
+
+            const subtitles = await this.fetchSubtitles(media);
+
+            const result: ProviderResult = {
+                sources,
+                subtitles,
+                diagnostics: [],
+            };
+
+            return result;
+        } catch (error) {
+            return this.emptyResult(error instanceof Error ? error.message : 'Unknown provider error');
+        }
+    }
+
+    private async fetchSubtitles(media: ProviderMediaObject): Promise<Subtitle[]> {
+        try {
+            let subUrl: string;
+            if (media.type === 'tv') {
+                subUrl = `${this.SUB_BASE_URL}/v2/tv/${media.tmdbId}/${media.s}/${media.e}`;
+            } else {
+                subUrl = `${this.SUB_BASE_URL}/v2/movie/${media.tmdbId}`;
+            }
+
+            const response = await axios.get(subUrl, {
+                headers: {
+                    ...this.HEADERS,
+                    Referer: this.BASE_URL,
+                },
+                timeout: 10000,
+            });
+
+            if (response.status !== 200) {
+                return [];
+            }
+
+            const subsData = response.data as Array<{ label: string; file: string }>;
+
+            const subtitles: Subtitle[] = subsData.map((sub) => ({
+                url: this.createProxyUrl(sub.file, {
+                    ...this.HEADERS,
+                    Referer: subUrl,
+                }),
+                format: 'vtt',
+                label: sub.label,
+            }));
+
+            return subtitles;
+        } catch (error) {
+            return [];
+        }
+    }
+
+    private async buildUrl(media: ProviderMediaObject): Promise<string> {
+        let itemId: string;
+        if (media.type === 'tv') {
+            itemId = `${media.tmdbId}_${media.s}_${media.e}`;
+        } else {
+            itemId = `${media.tmdbId}`;
+        }
+
+        const encrypted = await encryptItemId(itemId);
+        return `${this.BASE_URL}api/${media.type}/${encrypted}`;
+    }
+
+    private async fetchPage(url: string): Promise<string | null> {
+        try {
+            const response = await axios.get(url, {
+                headers: this.HEADERS,
+                timeout: 10000,
+            });
+
+            if (response.status !== 200) return null;
+            return response.data;
+        } catch {
+            return null;
+        }
+    }
+
+    private emptyResult(message: string): ProviderResult {
+        return {
+            sources: [],
+            subtitles: [],
+            diagnostics: [
+                {
+                    code: 'PROVIDER_ERROR',
+                    message: `${this.name}: ${message}`,
+                    field: '',
+                    severity: 'error',
+                },
+            ],
+        };
+    }
+
+    async healthCheck(): Promise<boolean> {
+        try {
+            const response = await axios.head(this.BASE_URL, {
+                timeout: 5000,
+                headers: this.HEADERS,
+            });
+            return response.status === 200;
+        } catch {
+            return false;
+        }
+    }
+}
