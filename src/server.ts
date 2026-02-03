@@ -17,6 +17,14 @@ async function main() {
         port: Number(process.env.PORT ?? 3000),
         publicUrl: process.env.PUBLIC_URL,
 
+        // CORS Configuration
+        cors: {
+            origin: '*',
+            credentials: true,
+            methods: ['GET', 'POST', 'OPTIONS'],
+            allowedHeaders: ['Content-Type', 'Authorization', 'User-Agent', 'Referer', 'Origin'],
+            exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range'],
+        },
         // Cache (memory for dev, Redis for prod)
         cache: {
             type: process.env.CACHE_TYPE as 'memory' | 'redis' ?? 'memory',
