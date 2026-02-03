@@ -12,9 +12,9 @@
     "dependencies": {
         "@omss/framework": "^1.1.7",
         "dotenv": "^16.4.5"
+        "@types/node": "^22.7.4"
     },
     "devDependencies": {
-        "@types/node": "^22.7.4",
         "prettier": "^3.3.3",
         "tsx": "^4.19.1",
         "typescript": "^5.6.2"
