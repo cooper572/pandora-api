@@ -40,10 +40,7 @@ async function main() {
         // Third Party Proxy removal
         proxyConfig: {
             knownThirdPartyProxies: knownThirdPartyProxies
-        },
-
-        // Enable proxy endpoint
-        enableProxyEndpoint: true
+        }
     });
 
     // Register providers
