@@ -60,6 +60,7 @@ async function main() {
     await server.start();
 }
 
-main().catch(() => {
+main().catch((error) => {
+    console.error('[Server] Startup failed:', error);
     process.exit(1);
 });
