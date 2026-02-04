@@ -1,4 +1,5 @@
 import { OMSSServer } from '@omss/framework';
+import cors from '@fastify/cors';
 import 'dotenv/config';
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -47,23 +48,14 @@ async function main() {
     const registry = server.getRegistry();
     await registry.discoverProviders(path.join(__dirname, './providers/'))
 
-    // Access the underlying Express app to add CORS middleware
-    const app = server.getApp();
-    
-    if (app) {
-        app.use((req: any, res: any, next: any) => {
-            res.header('Access-Control-Allow-Origin', '*');
-            res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-            res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
-            
-            if (req.method === 'OPTIONS') {
-                return res.sendStatus(200);
-            }
-            
-            next();
-        });
-    }
+    // Access the underlying Fastify instance to add CORS
+    const app = server.getInstance();
+    await app.register(cors, {
+        origin: true,
+        methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'User-Agent', 'Referer', 'Origin', 'Accept', 'Accept-Language'],
+        exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges'],
+    });
 
     await server.start();
 }
