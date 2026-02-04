@@ -47,23 +47,20 @@ async function main() {
     const registry = server.getRegistry();
     await registry.discoverProviders(path.join(__dirname, './providers/'))
 
-    // Extend CORS headers (framework already registers @fastify/cors)
-    const app = server.getInstance();
-    app.addHook('onSend', (request, reply, payload, done) => {
-        reply.header('Access-Control-Allow-Origin', '*');
-        reply.header('Access-Control-Allow-Methods', 'GET, OPTIONS, HEAD');
-        reply.header(
-            'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, Range, User-Agent, Referer, Origin, Accept-Language'
-        );
-        reply.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
-        done(null, payload);
+    // Access the underlying Fastify instance to add CORS middleware
+    const fastify = server.getInstance();
+    
+    // Register CORS plugin for Fastify
+    fastify.register(import('@fastify/cors'), {
+        origin: '*',
+        methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+        exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges']
     });
 
     await server.start();
 }
 
-main().catch((error) => {
-    console.error('[Server] Startup failed:', error);
+main().catch(() => {
     process.exit(1);
 });
