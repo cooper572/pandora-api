@@ -17,14 +17,6 @@ async function main() {
         port: Number(process.env.PORT ?? 3000),
         publicUrl: process.env.PUBLIC_URL,
 
-        // CORS Configuration
-        cors: {
-            origin: '*',
-            credentials: true,
-            methods: ['GET', 'POST', 'OPTIONS'],
-            allowedHeaders: ['Content-Type', 'Authorization', 'User-Agent', 'Referer', 'Origin'],
-            exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range'],
-        },
         // Cache (memory for dev, Redis for prod)
         cache: {
             type: process.env.CACHE_TYPE as 'memory' | 'redis' ?? 'memory',
@@ -54,6 +46,24 @@ async function main() {
     // Register providers
     const registry = server.getRegistry();
     await registry.discoverProviders(path.join(__dirname, './providers/'))
+
+    // Access the underlying Express app to add CORS middleware
+    const app = server.getApp();
+    
+    if (app) {
+        app.use((req: any, res: any, next: any) => {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
+            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+            res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
+            
+            if (req.method === 'OPTIONS') {
+                return res.sendStatus(200);
+            }
+            
+            next();
+        });
+    }
 
     await server.start();
 }
