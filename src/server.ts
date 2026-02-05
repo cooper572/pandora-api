@@ -43,20 +43,21 @@ async function main() {
         }
     });
 
-    // Register providers
-    const registry = server.getRegistry();
-    await registry.discoverProviders(path.join(__dirname, './providers/'))
-
     // Access the underlying Fastify instance to add CORS middleware
     const fastify = server.getInstance();
     
-    // Register CORS plugin for Fastify
-    fastify.register(import('@fastify/cors'), {
+    // Register CORS plugin for Fastify BEFORE routes are registered
+    await fastify.register(import('@fastify/cors'), {
         origin: '*',
         methods: ['GET', 'POST', 'OPTIONS', 'HEAD'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
-        exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges']
+        exposedHeaders: ['Content-Length', 'Content-Type', 'Content-Range', 'Accept-Ranges'],
+        credentials: false
     });
+
+    // Register providers
+    const registry = server.getRegistry();
+    await registry.discoverProviders(path.join(__dirname, './providers/'))
 
     await server.start();
 }
