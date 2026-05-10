@@ -102,6 +102,14 @@ export const SOURCES = [
         retries: 3,
         sourcesTimeout: 5000,
     },
+    {
+        key: 'streammafia',
+        label: 'MafiaEmbed',
+        proxyParam: 'sm',
+        timeout: 25000,
+        jitter: 600,
+        retries: 2,
+    }
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
