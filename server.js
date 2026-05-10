@@ -16,12 +16,13 @@ import * as meowtv from './sources/meowtv.js';
 import * as vaplayer from './sources/vaplayer.js';
 import * as icefy from './sources/icefy.js';
 import * as videasy from './sources/videasy.js';
+import * as streammafia from './sources/streammafia.js';
 
 
 import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES } from './routes/subtitles.js';
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 
-const ALL_SOURCE_MODULES = { vidzee, vidnest, vidsrc, vidrock, cinesu, vixsrc, vidlink, '02movie': _02movie, meowtv, vaplayer, icefy, videasy };
+const ALL_SOURCE_MODULES = { vidzee, vidnest, vidsrc, vidrock, cinesu, vixsrc, vidlink, '02movie': _02movie, meowtv, vaplayer, icefy, videasy, streammafia };
 
 const SOURCE_MODULES = Object.fromEntries(
     Object.entries(ALL_SOURCE_MODULES).filter(([key]) => {
@@ -160,13 +161,18 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null) {
 
 function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
     if (!rawUrl) return null;
-    const raw = (typeof rawUrl === 'object' ? rawUrl.url : rawUrl).replace('http://', 'https://');
+    const raw = (typeof rawUrl === 'object' ? rawUrl.url : rawUrl);
     const extraHeaders = typeof rawUrl === 'object' && rawUrl.headers ? rawUrl.headers : null;
     const skipProxy = typeof rawUrl === 'object' && rawUrl.skipProxy;
     const cfg = SOURCE_MAP[sourceKey];
     if (!cfg || cfg.skipProxy || skipProxy) return raw;
-    const safeBase = absoluteBase.replace('http://', 'https://');
-    let wrapped = `${safeBase}/api?url=` + encodeURIComponent(raw) + '&' + cfg.proxyParam + '=1';
+
+    // Only convert to HTTPS if not localhost
+    const isLocalHost = absoluteBase.includes('localhost') || absoluteBase.includes('127.0.0.1');
+    const processedRaw = isLocalHost ? raw : raw.replace('http://', 'https://');
+    const safeBase = isLocalHost ? absoluteBase : absoluteBase.replace('http://', 'https://');
+
+    let wrapped = `${safeBase}/api?url=` + encodeURIComponent(processedRaw) + '&' + cfg.proxyParam + '=1';
     if (extraHeaders) {
         wrapped += '&proxyHeaders=' + encodeURIComponent(JSON.stringify(extraHeaders));
     }
@@ -307,10 +313,11 @@ async function handleHealth() {
     };
 }
 
-async function handleTestSource(sourceKey, id, s, e, clientIP = null) {
+async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = null) {
     const start = Date.now();
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
     const cfg = SOURCE_MAP[sourceKey];
+    const absoluteBase = getAbsoluteBase(host);
 
     if (cfg.disabled) {
         return {
@@ -320,21 +327,46 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null) {
         };
     }
 
-    let rawUrl = null;
+    let rawResult = null;
     let fetchError = null;
     try {
-        rawUrl = await fetchSource(cfg, cacheKey, id, s, e, clientIP);
+        rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP);
     } catch (err) {
-        console.error(err);
         fetchError = err.message;
     }
 
+    const mod = SOURCE_MODULES[sourceKey];
+
+    let candidates = [];
+    if (rawResult) {
+        if (mod.MULTI_URL && rawResult?.allUrls?.length) {
+            candidates = rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u });
+        } else {
+            const raw = typeof rawResult === 'object' ? rawResult.url : rawResult;
+            if (raw) candidates = [{ url: raw, headers: rawResult?.headers }];
+        }
+    }
+
+    let bestRaw = null;
+    for (const candidate of candidates) {
+        if (mod.SKIP_VERIFY) {
+            bestRaw = candidate;
+            break;
+        }
+        const ok = await verifyStream(candidate.url, sourceKey);
+        if (ok) {
+            bestRaw = candidate;
+            break;
+        }
+    }
+
     const elapsed = Date.now() - start;
-    const raw = rawUrl ? (typeof rawUrl === 'object' ? rawUrl.url : rawUrl) : null;
+    const wrappedUrl = bestRaw ? wrapUrl(bestRaw, sourceKey, absoluteBase) : null;
+    const rawUrl = bestRaw?.url ?? null;
 
     return {
         status: 200,
-        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: !!raw, url: wrapUrl(raw, sourceKey), raw_url: raw, elapsed_ms: elapsed, error: fetchError }, null, 2),
+        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: !!wrappedUrl, url: wrappedUrl, raw_url: rawUrl, elapsed_ms: elapsed, error: fetchError }, null, 2),
         contentType: 'application/json',
     };
 }
@@ -478,7 +510,7 @@ async function handleRequest(req) {
         if (!source || !SOURCE_MAP[source]) {
             return { status: 400, body: JSON.stringify({ error: 'invalid or missing source' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         }
-        const result = await handleTestSource(source, id, s, e, clientIP);
+        const result = await handleTestSource(source, id, s, e, clientIP, reqUrl.host);
         return { status: result.status, body: result.body, headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
