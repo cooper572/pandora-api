@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import http from 'http';
 import { SOURCES, SOURCE_MAP, HEALTH_PROBE_ID, CACHE_TTL } from './config.js';
 
@@ -180,7 +183,10 @@ async function verifyStream(rawUrl, sourceKey) {
             new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
         ]);
         if (res.status >= 400) { res.body?.cancel(); return false; }
-        const text = await res.text();
+        const text = await Promise.race([
+            res.text(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('text timeout')), 5000))
+        ]);
         return text.trim().startsWith('#EXTM3U');
     } catch { return false; }
 }
@@ -239,18 +245,25 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
 async function getMetadata(id, s, e) {
     try {
         const k = process.env.TMDB_API_KEY;
-        if (!k) return null;
+        if (!k || k === 'demo_key_12345ab45d9e64e67088f910f93') {
+            return { error: 'TMDB API key not configured', note: 'Set TMDB_API_KEY in .env file' };
+        }
         const url = s
             ? `https://api.themoviedb.org/3/tv/${id}/season/${s}/episode/${e || 1}?api_key=${k}`
             : `https://api.themoviedb.org/3/movie/${id}?api_key=${k}`;
-        const res = await fetch(url);
+
+        const res = await Promise.race([
+            fetch(url),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('metadata timeout')), 5000))
+        ]);
+
         if (!res.ok) {
             res.body?.cancel();
-            return null;
+            return { error: `TMDB API error: ${res.status}` };
         }
         return await res.json();
-    } catch {
-        return null;
+    } catch (error) {
+        return { error: 'Metadata fetch failed', details: error.message };
     }
 }
 

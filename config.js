@@ -23,6 +23,7 @@ export const SOURCES = [
         timeout: 25000,
         jitter: 700,
         retries: 2,
+        sourcesTimeout: 5000,
     },
     {
         key: 'vidrock',
@@ -90,6 +91,7 @@ export const SOURCES = [
         timeout: 20000,
         jitter: 500,
         retries: 2,
+        sourcesTimeout: 5000,
     },
     {
         key: 'videasy',
@@ -98,6 +100,7 @@ export const SOURCES = [
         timeout: 20000,
         jitter: 900,
         retries: 3,
+        sourcesTimeout: 5000,
     },
 ];
 
