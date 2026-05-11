@@ -8,7 +8,6 @@ export const SOURCES = [
     { key: 'vidlink', sourceFile: 'vidlink', label: 'VidLink', proxyParam: 'vl', timeout: 25000, jitter: 500, retries: 2 },
     { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 20000, jitter: 600, retries: 2, skipProxy: true },
     { key: 'meowtv', sourceFile: 'meowtv', label: 'MeowTV', proxyParam: 'mt', timeout: 20000, jitter: 500, retries: 2 },
-    { key: 'vaplayer', sourceFile: 'vaplayer', label: 'AirFlix', proxyParam: 'af', timeout: 20000, jitter: 600, retries: 2, skipProxy: true, disabled: true },
     { key: 'icefy', sourceFile: 'icefy', label: 'Icefy', proxyParam: 'iy', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 5000 },
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 20000, jitter: 900, retries: 3, sourcesTimeout: 5000 },
     { key: 'streammafia', sourceFile: 'streammafia', label: 'MafiaEmbed', proxyParam: 'sm', timeout: 25000, jitter: 600, retries: 2 },

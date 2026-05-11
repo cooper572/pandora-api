@@ -18,6 +18,43 @@ const SERVERS = [
     { name: 'lamovie', url: 'https://api.videasy.net/lamovie/sources-with-title' },
 ];
 
+const proxyPool = { list: [], fetchedAt: 0 };
+
+async function getProxies() {
+    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
+    try {
+        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc');
+        const json = await res.json();
+        proxyPool.list = (json.data || []).filter(p =>
+            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.upTime >= 80 &&
+            p.responseTime < 5000
+        ).map(p => ({ ip: p.ip, port: p.port }));
+        proxyPool.fetchedAt = Date.now();
+    } catch { }
+    return proxyPool.list;
+}
+
+async function fetchWithProxyFallback(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (res.ok || (res.status !== 403 && res.status !== 429)) return res;
+        res.body?.cancel();
+        throw new Error(`status ${res.status}`);
+    } catch {
+        const proxies = await getProxies();
+        if (!proxies.length) return null;
+        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+        try {
+            const { ProxyAgent } = await import('undici');
+            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            return await fetch(url, { ...options, dispatcher });
+        } catch {
+            return null;
+        }
+    }
+}
+
 const decCache = new Map();
 
 async function decrypt(blob, tmdbId) {
@@ -25,12 +62,12 @@ async function decrypt(blob, tmdbId) {
     const key = `${tmdbId}:${blob.slice(0, 32)}`;
     if (decCache.has(key)) return decCache.get(key);
     try {
-        const res = await fetch(DEC_API, {
+        const res = await fetchWithProxyFallback(DEC_API, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: blob, id: tmdbId })
         });
-        if (!res.ok) return null;
+        if (!res?.ok) return null;
         const json = await res.json();
         if (json.status !== 200 || !json.result?.sources) return null;
         const payload = { sources: json.result.sources ?? [], subtitles: json.result.subtitles ?? [] };
@@ -51,8 +88,8 @@ async function fetchServer(server, id, s, e, title) {
             episodeId: String(e ?? 1),
             seasonId: String(s ?? 1),
         });
-        const res = await fetch(`${server.url}?${params}`, { headers: HEADERS });
-        if (!res.ok) return null;
+        const res = await fetchWithProxyFallback(`${server.url}?${params}`, { headers: HEADERS });
+        if (!res?.ok) return null;
         const blob = await res.text();
         if (!blob || blob.length < 10) return null;
         const decrypted = await decrypt(blob, String(id));

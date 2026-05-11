@@ -22,6 +22,43 @@ const PROXY_HEADERS = {
 
 const STEP_TIMEOUT_MS = 7000;
 
+const proxyPool = { list: [], fetchedAt: 0 };
+
+async function getProxies() {
+    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
+    try {
+        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc');
+        const json = await res.json();
+        proxyPool.list = (json.data || []).filter(p =>
+            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.upTime >= 80 &&
+            p.responseTime < 5000
+        ).map(p => ({ ip: p.ip, port: p.port }));
+        proxyPool.fetchedAt = Date.now();
+    } catch { }
+    return proxyPool.list;
+}
+
+async function fetchWithProxyFallback(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (res.ok || (res.status !== 403 && res.status !== 429)) return res;
+        res.body?.cancel();
+        throw new Error(`status ${res.status}`);
+    } catch {
+        const proxies = await getProxies();
+        if (!proxies.length) return null;
+        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+        try {
+            const { ProxyAgent } = await import('undici');
+            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            return await fetch(url, { ...options, dispatcher });
+        } catch {
+            return null;
+        }
+    }
+}
+
 function makeAbort(ms) {
     const c = new AbortController();
     const t = setTimeout(() => c.abort(), ms);
@@ -33,12 +70,12 @@ async function fetchHtml(url, extraHeaders = {}, outerSignal = null) {
     const { signal, clear } = makeAbort(STEP_TIMEOUT_MS);
     const combined = outerSignal ? AbortSignal.any([outerSignal, signal]) : signal;
     try {
-        const res = await fetch(url, {
+        const res = await fetchWithProxyFallback(url, {
             headers: { ...HEADERS, ...extraHeaders },
             signal: combined,
             redirect: 'follow',
         });
-        if (res.status !== 200) throw new Error(`HTTP ${res.status} fetching ${url}`);
+        if (!res || res.status !== 200) throw new Error(`HTTP ${res?.status ?? 'null'} fetching ${url}`);
         return await res.text();
     } finally {
         clear();

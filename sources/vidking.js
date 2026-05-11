@@ -16,9 +16,47 @@ export const SKIP_VERIFY = false;
 export const MULTI_URL = false;
 export const VERIFY_HEADERS = { ...HEADERS };
 
+const proxyPool = { list: [], fetchedAt: 0 };
+
+async function getProxies() {
+    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
+    try {
+        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc');
+        const json = await res.json();
+        proxyPool.list = (json.data || []).filter(p =>
+            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.upTime >= 80 &&
+            p.responseTime < 5000
+        ).map(p => ({ ip: p.ip, port: p.port }));
+        proxyPool.fetchedAt = Date.now();
+    } catch { }
+    return proxyPool.list;
+}
+
+async function fetchWithProxyFallback(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (res.ok || (res.status !== 403 && res.status !== 429)) return res;
+        res.body?.cancel();
+        throw new Error(`status ${res.status}`);
+    } catch {
+        const proxies = await getProxies();
+        if (!proxies.length) return null;
+        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+        try {
+            const { ProxyAgent } = await import('undici');
+            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            return await fetch(url, { ...options, dispatcher });
+        } catch {
+            return null;
+        }
+    }
+}
+
 async function fetchMeta(tmdbId, mediaType) {
     const k = process.env.TMDB_API_KEY;
-    const res = await fetch(`https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${k}&append_to_response=external_ids`);
+    const res = await fetchWithProxyFallback(`https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${k}&append_to_response=external_ids`);
+    if (!res) return { title: '', year: '', imdbId: '' };
     const d = await res.json();
     const title = mediaType === 'movie' ? (d.title || d.original_title || '') : (d.name || d.original_name || '');
     const year = (d.release_date || d.first_air_date || '').slice(0, 4);
@@ -29,12 +67,12 @@ async function fetchMeta(tmdbId, mediaType) {
 async function decrypt(blob, tmdbId) {
     if (!blob || blob.length < 10) return null;
     try {
-        const res = await fetch(DEC_API, {
+        const res = await fetchWithProxyFallback(DEC_API, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: blob, id: tmdbId })
         });
-        if (!res.ok) return null;
+        if (!res?.ok) return null;
         const json = await res.json();
         if (json.status !== 200 || !json.result?.sources) return null;
         return json.result.sources.filter(s => s?.url).map(s => s.url);
@@ -58,8 +96,8 @@ export async function getStream(id, s, e) {
         imdbId,
         _t: Date.now(),
     });
-    const res = await fetch(`${apiUrl}?${params}`, { headers: HEADERS });
-    if (!res.ok) return null;
+    const res = await fetchWithProxyFallback(`${apiUrl}?${params}`, { headers: HEADERS });
+    if (!res?.ok) return null;
     const blob = await res.text();
     const urls = await decrypt(blob, String(id));
     return urls?.[0] ?? null;

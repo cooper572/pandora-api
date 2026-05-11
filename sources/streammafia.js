@@ -13,6 +13,43 @@ const getUA = () => UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
 export const SKIP_VERIFY = true;
 export const MULTI_URL = true;
 
+const proxyPool = { list: [], fetchedAt: 0 };
+
+async function getProxies() {
+    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
+    try {
+        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc');
+        const json = await res.json();
+        proxyPool.list = (json.data || []).filter(p =>
+            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.upTime >= 80 &&
+            p.responseTime < 5000
+        ).map(p => ({ ip: p.ip, port: p.port }));
+        proxyPool.fetchedAt = Date.now();
+    } catch { }
+    return proxyPool.list;
+}
+
+async function fetchWithProxyFallback(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (res.ok || (res.status !== 403 && res.status !== 429)) return res;
+        res.body?.cancel();
+        throw new Error(`status ${res.status}`);
+    } catch {
+        const proxies = await getProxies();
+        if (!proxies.length) return null;
+        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+        try {
+            const { ProxyAgent } = await import('undici');
+            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            return await fetch(url, { ...options, dispatcher });
+        } catch {
+            return null;
+        }
+    }
+}
+
 function decryptPayload(payload) {
     const iv = Buffer.from(payload.iv, 'base64');
     const tag = Buffer.from(payload.tag, 'base64');
@@ -26,8 +63,8 @@ function decryptPayload(payload) {
 
 async function getSessionCookie(headers) {
     try {
-        const res = await fetch(BASE_URL + '/api/session', { method: 'POST', headers, body: null });
-        return res.headers.get('Set-Cookie') || '';
+        const res = await fetchWithProxyFallback(BASE_URL + '/api/session', { method: 'POST', headers, body: null });
+        return res?.headers.get('Set-Cookie') || '';
     } catch {
         return '';
     }
@@ -35,8 +72,8 @@ async function getSessionCookie(headers) {
 
 async function getToken(headers) {
     try {
-        const res = await fetch(`${BASE_URL}/api/token`, { headers, referrer: BASE_URL + '/' });
-        if (res.status !== 200) return '';
+        const res = await fetchWithProxyFallback(`${BASE_URL}/api/token`, { headers, referrer: BASE_URL + '/' });
+        if (!res || res.status !== 200) return '';
         const data = await res.json();
         return data.token || '';
     } catch {
@@ -46,8 +83,8 @@ async function getToken(headers) {
 
 async function fetchEncrypted(url, headers) {
     try {
-        const res = await fetch(url, { headers });
-        if (res.status !== 200) return null;
+        const res = await fetchWithProxyFallback(url, { headers });
+        if (!res || res.status !== 200) return null;
         return await res.json();
     } catch {
         return null;
@@ -56,21 +93,12 @@ async function fetchEncrypted(url, headers) {
 
 function extractSources(api, proxyHeaders) {
     const sources = [];
-
     if (api.stream?.hls_streaming) {
-        sources.push({
-            url: api.stream.hls_streaming,
-            headers: proxyHeaders,
-        });
+        sources.push({ url: api.stream.hls_streaming, headers: proxyHeaders });
     }
-
     for (const download of api.stream?.download ?? []) {
-        sources.push({
-            url: download.url,
-            headers: proxyHeaders,
-        });
+        sources.push({ url: download.url, headers: proxyHeaders });
     }
-
     return sources;
 }
 

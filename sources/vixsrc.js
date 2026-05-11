@@ -12,6 +12,43 @@ export const VERIFY_HEADERS = { ...HEADERS };
 export const SKIP_VERIFY = false;
 export const MULTI_URL = false;
 
+const proxyPool = { list: [], fetchedAt: 0 };
+
+async function getProxies() {
+    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
+    try {
+        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc');
+        const json = await res.json();
+        proxyPool.list = (json.data || []).filter(p =>
+            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.upTime >= 80 &&
+            p.responseTime < 5000
+        ).map(p => ({ ip: p.ip, port: p.port }));
+        proxyPool.fetchedAt = Date.now();
+    } catch { }
+    return proxyPool.list;
+}
+
+async function fetchWithProxyFallback(url, options = {}) {
+    try {
+        const res = await fetch(url, options);
+        if (res.ok || (res.status !== 403 && res.status !== 429)) return res;
+        res.body?.cancel();
+        throw new Error(`status ${res.status}`);
+    } catch {
+        const proxies = await getProxies();
+        if (!proxies.length) return null;
+        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
+        try {
+            const { ProxyAgent } = await import('undici');
+            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            return await fetch(url, { ...options, dispatcher });
+        } catch {
+            return null;
+        }
+    }
+}
+
 function buildApiUrl(id, s, e) {
     if (s && e) return `${BASE_URL}/api/tv/${id}/${s}/${e}`;
     return `${BASE_URL}/api/movie/${id}`;
@@ -19,8 +56,8 @@ function buildApiUrl(id, s, e) {
 
 async function fetchApi(url) {
     try {
-        const res = await fetch(url, { headers: HEADERS });
-        if (res.status !== 200) return null;
+        const res = await fetchWithProxyFallback(url, { headers: HEADERS });
+        if (!res || res.status !== 200) return null;
         return res.json();
     } catch {
         return null;
@@ -30,8 +67,8 @@ async function fetchApi(url) {
 async function fetchEmbedPage(src) {
     try {
         const url = src.startsWith('http') ? src : BASE_URL + src;
-        const res = await fetch(url, { headers: HEADERS });
-        if (res.status !== 200) return null;
+        const res = await fetchWithProxyFallback(url, { headers: HEADERS });
+        if (!res || res.status !== 200) return null;
         return res.text();
     } catch {
         return null;
@@ -43,10 +80,8 @@ function extractTokenData(html) {
     const expires = html.match(/expires["']\s*:\s*["']([^"']+)/)?.[1];
     const playlist = html.match(/url\s*:\s*["']([^"']+)/)?.[1];
     const lang = html.match(/lang(?:uage)?["']\s*:\s*["']([a-z]{2,5})/i)?.[1] ?? 'en';
-
     if (!token || !expires || !playlist) return null;
     if (parseInt(expires, 10) * 1000 - 60_000 < Date.now()) return null;
-
     return { token, expires, playlist, lang };
 }
 
@@ -57,8 +92,8 @@ function buildMasterUrl({ token, expires, playlist, lang }) {
 
 async function fetchPlaylist(masterUrl) {
     try {
-        const res = await fetch(masterUrl, { headers: HEADERS });
-        if (res.status !== 200) return null;
+        const res = await fetchWithProxyFallback(masterUrl, { headers: HEADERS });
+        if (!res || res.status !== 200) return null;
         return res.text();
     } catch {
         return null;
