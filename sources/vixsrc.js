@@ -8,13 +8,9 @@ const HEADERS = {
     'Origin': BASE_URL,
 };
 
-const PLAYLIST_HEADERS = {
-    'User-Agent': HEADERS['User-Agent'],
-    'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': BASE_URL + '/',
-    'Origin': BASE_URL,
-};
+export const VERIFY_HEADERS = { ...HEADERS };
+export const SKIP_VERIFY = false;
+export const MULTI_URL = false;
 
 function buildApiUrl(id, s, e) {
     if (s && e) return `${BASE_URL}/api/tv/${id}/${s}/${e}`;
@@ -61,12 +57,31 @@ function buildMasterUrl({ token, expires, playlist, lang }) {
 
 async function fetchPlaylist(masterUrl) {
     try {
-        const res = await fetch(masterUrl, { headers: PLAYLIST_HEADERS });
+        const res = await fetch(masterUrl, { headers: HEADERS });
         if (res.status !== 200) return null;
         return res.text();
     } catch {
         return null;
     }
+}
+
+function getBestVariantUrl(content, masterUrl) {
+    const lines = content.split('\n');
+    let bestRes = 0;
+    let bestUrl = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
+        const resMatch = line.match(/RESOLUTION=\d+x(\d+)/);
+        const res = resMatch ? parseInt(resMatch[1], 10) : 0;
+        const urlLine = lines[i + 1]?.trim();
+        if (!urlLine || urlLine.startsWith('#')) continue;
+        if (res > bestRes) {
+            bestRes = res;
+            bestUrl = urlLine.startsWith('http') ? urlLine : new URL(urlLine, masterUrl).href;
+        }
+    }
+    return bestUrl;
 }
 
 export async function getStream(id, s, e) {
@@ -86,10 +101,27 @@ export async function getStream(id, s, e) {
         const playlist = await fetchPlaylist(masterUrl);
         if (!playlist || !playlist.trim().startsWith('#EXTM3U')) return null;
 
-        return masterUrl;
+        const variantUrl = getBestVariantUrl(playlist, masterUrl);
+        return variantUrl ?? masterUrl;
     } catch {
         return null;
     }
 }
 
-export const VERIFY_HEADERS = { ...PLAYLIST_HEADERS };
+export async function proxyStream(url, res, { fetchUpstream, rewriteM3u8 }) {
+    const upstream = await fetchUpstream(url, 0, HEADERS);
+    const ct = (upstream.headers['content-type'] || '').toLowerCase();
+    const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(url);
+    if (isM3u8) {
+        const chunks = [];
+        for await (const c of upstream) chunks.push(c);
+        const body = Buffer.concat(chunks).toString('utf8');
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        return res.end(rewriteM3u8(body, url, '&vx=1'));
+    }
+    res.setHeader('Content-Type', ct || 'application/octet-stream');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    upstream.pipe(res);
+}
