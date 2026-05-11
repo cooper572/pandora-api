@@ -2,27 +2,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import http from 'http';
-import { SOURCES, SOURCE_MAP, HEALTH_PROBE_ID, CACHE_TTL } from './config.js';
-
-import * as vidzee from './sources/vidzee.js';
-import * as vidnest from './sources/vidnest.js';
-import * as vidsrc from './sources/vidsrc.js';
-import * as vidrock from './sources/vidrock.js';
-import * as cinesu from './sources/cinesu.js';
-import * as vixsrc from './sources/vixsrc.js';
-import * as vidlink from './sources/vidlink.js';
-import * as _02movie from './sources/02movie.js';
-import * as meowtv from './sources/meowtv.js';
-import * as vaplayer from './sources/vaplayer.js';
-import * as icefy from './sources/icefy.js';
-import * as videasy from './sources/videasy.js';
-import * as streammafia from './sources/streammafia.js';
-import * as vidking from './sources/vidking.js';
+import { SOURCES, SOURCE_MAP, CACHE_TTL } from './config.js';
 
 import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES } from './routes/subtitles.js';
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
+import { handleHealth } from './routes/health.js';
 
-const ALL_SOURCE_MODULES = { vidzee, vidnest, vidsrc, vidrock, cinesu, vixsrc, vidlink, '02movie': _02movie, meowtv, vaplayer, icefy, videasy, streammafia, vidking };
+const ALL_SOURCE_MODULES = Object.fromEntries(
+    await Promise.all(
+        SOURCES.map(async cfg => {
+            const mod = await import(`./sources/${cfg.sourceFile}.js`);
+            return [cfg.key, mod];
+        })
+    )
+);
 
 const SOURCE_MODULES = Object.fromEntries(
     Object.entries(ALL_SOURCE_MODULES).filter(([key]) => {
@@ -272,46 +265,6 @@ async function getMetadata(id, s, e) {
     }
 }
 
-async function handleHealth() {
-    const results = await Promise.allSettled(
-        SOURCES.filter(cfg => !cfg.disabled).map(cfg => (async () => {
-            const t = Date.now();
-            const mod = SOURCE_MODULES[cfg.key];
-            let url = null;
-            if (cfg.multiBase) {
-                for (const base of mod.BASES) {
-                    url = await withTimeout(withRetry(() => mod.getStream(HEALTH_PROBE_ID, null, null, base), 2, 500), cfg.timeout).catch(() => null);
-                    if (url) break;
-                }
-            } else {
-                url = await withTimeout(withRetry(() => mod.getStream(HEALTH_PROBE_ID, null, null), cfg.retries, 1000), cfg.timeout).catch(() => null);
-            }
-            return { ok: !!url, ms: Date.now() - t };
-        })())
-    );
-
-    function unwrap(r) {
-        return r.status === 'fulfilled' ? r.value : { ok: false, ms: null, error: r.reason?.message };
-    }
-
-    const enabledSources = SOURCES.filter(cfg => !cfg.disabled);
-    const byKey = Object.fromEntries(enabledSources.map((cfg, i) => [cfg.key, unwrap(results[i])]));
-    const allOk = Object.values(byKey).every(v => v.ok);
-
-    return {
-        status: allOk ? 200 : 207,
-        body: JSON.stringify({
-            status: allOk ? 'ok' : 'degraded',
-            timestamp: new Date().toISOString(),
-            tmdb: !!process.env.TMDB_API_KEY,
-            cache: cache.size,
-            probe_id: HEALTH_PROBE_ID,
-            sources: byKey,
-        }, null, 2),
-        contentType: 'application/json',
-    };
-}
-
 async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = null) {
     const start = Date.now();
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
@@ -445,7 +398,7 @@ async function handleRequest(req) {
     }
 
     if (pathname === '/api/health') {
-        const result = await handleHealth();
+        const result = await handleHealth(SOURCE_MODULES, cache, verifyStream);
         return { status: result.status, body: result.body, headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
@@ -640,6 +593,11 @@ async function handleRequest(req) {
     if (downloadsTvMatch) {
         const [, id, season, episode] = downloadsTvMatch;
         return handleDownloadTv(id, season, episode, corsHeaders);
+    }
+
+    if (pathname === '/api/sources') {
+        const list = SOURCES.filter(cfg => !cfg.disabled).map(cfg => cfg.label);
+        return { status: 200, body: JSON.stringify(list, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
     return { status: 404, body: JSON.stringify({ error: 'not found' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
