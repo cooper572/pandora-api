@@ -17,12 +17,12 @@ import * as vaplayer from './sources/vaplayer.js';
 import * as icefy from './sources/icefy.js';
 import * as videasy from './sources/videasy.js';
 import * as streammafia from './sources/streammafia.js';
-
+import * as vidking from './sources/vidking.js';
 
 import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES } from './routes/subtitles.js';
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 
-const ALL_SOURCE_MODULES = { vidzee, vidnest, vidsrc, vidrock, cinesu, vixsrc, vidlink, '02movie': _02movie, meowtv, vaplayer, icefy, videasy, streammafia };
+const ALL_SOURCE_MODULES = { vidzee, vidnest, vidsrc, vidrock, cinesu, vixsrc, vidlink, '02movie': _02movie, meowtv, vaplayer, icefy, videasy, streammafia, vidking };
 
 const SOURCE_MODULES = Object.fromEntries(
     Object.entries(ALL_SOURCE_MODULES).filter(([key]) => {
@@ -167,7 +167,6 @@ function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
     const cfg = SOURCE_MAP[sourceKey];
     if (!cfg || cfg.skipProxy || skipProxy) return raw;
 
-    // Only convert to HTTPS if not localhost
     const isLocalHost = absoluteBase.includes('localhost') || absoluteBase.includes('127.0.0.1');
     const processedRaw = isLocalHost ? raw : raw.replace('http://', 'https://');
     const safeBase = isLocalHost ? absoluteBase : absoluteBase.replace('http://', 'https://');

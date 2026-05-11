@@ -109,7 +109,16 @@ export const SOURCES = [
         timeout: 25000,
         jitter: 600,
         retries: 2,
-    }
+    },
+    {
+        key: 'vidking',
+        label: 'VidKing',
+        proxyParam: 'vk',
+        timeout: 20000,
+        jitter: 700,
+        retries: 2,
+        sourcesTimeout: 5000,
+    },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
