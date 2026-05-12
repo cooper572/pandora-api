@@ -116,6 +116,7 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}) {
 }
 
 function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
+    const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
     const qmark = url.indexOf('?');
     const base = qmark === -1 ? url : url.slice(0, qmark);
     const dir = base.slice(0, base.lastIndexOf('/') + 1);
@@ -127,12 +128,12 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
             return t.replace(/URI="([^"]+)"/g, (match, uri) => {
                 const abs = uri.startsWith('http') ? uri : uri.startsWith('/') ? originBase + uri : dir + uri;
                 const httpsAbs = abs.replace('http://', 'https://');
-                return `URI="${absoluteBase}/api?url=${encodeURIComponent(httpsAbs)}${extraParam}"`;
+                return `URI="${safeBase}/api?url=${encodeURIComponent(httpsAbs)}${extraParam}"`;
             });
         }
         const abs = t.startsWith('http') ? t : t.startsWith('/') ? originBase + t : dir + t;
         const httpsAbs = abs.replace('http://', 'https://');
-        return (absoluteBase || '') + '/api?url=' + encodeURIComponent(httpsAbs) + extraParam;
+        return safeBase + '/api?url=' + encodeURIComponent(httpsAbs) + extraParam;
     }).join('\n');
 }
 
@@ -244,7 +245,7 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
             }
 
             const allUrls = c.raw?.allUrls
-                ? c.raw.allUrls.map(u => ({ url: u, headers: c.raw.headers }))
+                ? c.raw.allUrls.map(u => (typeof u === 'object' ? u : { url: u, headers: {} }))
                 : [c.raw];
             for (const candidate of allUrls) {
                 const raw = typeof candidate === 'object' ? candidate.url : candidate;
@@ -581,7 +582,9 @@ async function handleRequest(req) {
                     }
                     if (ct.includes('mpegurl') || ct.includes('m3u8')) {
                         const text = await upstream.text();
-                        const rewritten = rewriteM3u8(text, cleanUrl, `&${cfg.proxyParam}=1`, `https://${reqUrl.host}`);
+                        const absoluteBase = getAbsoluteBase(reqUrl.host);
+                        const encodedHeaders = encodeURIComponent(JSON.stringify(extraHeaders));
+                        const rewritten = rewriteM3u8(text, cleanUrl, `&${cfg.proxyParam}=1&proxyHeaders=${encodedHeaders}`, absoluteBase);
                         return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                     }
                     const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(cleanUrl);
@@ -614,7 +617,11 @@ async function handleRequest(req) {
                 const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(rawUrl);
                 if (isM3u8) {
                     const text = await upstream.text();
-                    return { status: 200, body: rewriteM3u8(text, rawUrl), headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
+                    const absoluteBase = getAbsoluteBase(reqUrl.host);
+                    const extraParam = matchedSource
+                        ? `&${SOURCE_MAP[matchedSource.key].proxyParam}=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders || '{}')}`
+                        : (q.proxyHeaders ? `&pp=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders)}` : '');
+                    return { status: 200, body: rewriteM3u8(text, rawUrl, extraParam, absoluteBase), headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                 }
                 const buf = await upstream.arrayBuffer();
                 const full = new Uint8Array(buf);
