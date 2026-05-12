@@ -56,9 +56,9 @@ const proxyPool = { list: [], fetchedAt: 0 };
 async function getProxies() {
     if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
     try {
-        const res = await fetch('https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc', {
-            headers: { 'User-Agent': getUA() }
-        });
+        const listUrl = process.env.PROXY_LIST_URL || 'https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc';
+        const res = await fetch(listUrl, { headers: { 'User-Agent': getUA() } });
+        if (!res.ok) throw new Error(`proxy list ${res.status}`);
         const json = await res.json();
         proxyPool.list = (json.data || []).filter(p =>
             p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
@@ -672,7 +672,11 @@ async function handleRequest(req) {
                     const cfg = SOURCE_MAP[matchedSource.key];
                     let extraHeaders = { ...(mod.VERIFY_HEADERS || {}) };
                     if (q.proxyHeaders) {
-                        try { Object.assign(extraHeaders, JSON.parse(decodeURIComponent(q.proxyHeaders))); } catch { }
+                        try {
+                            let ph = q.proxyHeaders;
+                            while (ph.includes('%25')) ph = decodeURIComponent(ph);
+                            Object.assign(extraHeaders, JSON.parse(decodeURIComponent(ph)));
+                        } catch { }
                     }
                     let cleanUrl = rawUrl;
                     try {
@@ -705,20 +709,23 @@ async function handleRequest(req) {
                         const text = await upstream.text();
                         if (text.trim().startsWith('#EXTM3U')) {
                             const absoluteBase = getAbsoluteBase(reqUrl.host);
-                            const encodedHeaders = encodeURIComponent(JSON.stringify(extraHeaders));
+                            const canonicalHeaders = {
+                                'User-Agent': extraHeaders['User-Agent'] || '',
+                                'Accept': extraHeaders['Accept'] || '*/*',
+                                'Accept-Language': extraHeaders['Accept-Language'] || 'en-US,en;q=0.9',
+                                ...(extraHeaders['Referer'] ? { 'Referer': extraHeaders['Referer'] } : {}),
+                                ...(extraHeaders['Origin'] ? { 'Origin': extraHeaders['Origin'] } : {}),
+                            };
+                            const encodedHeaders = encodeURIComponent(JSON.stringify(canonicalHeaders));
                             const rewritten = rewriteM3u8(text, cleanUrl, `&${cfg.proxyParam}=1&proxyHeaders=${encodedHeaders}`, absoluteBase);
                             return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                         }
                         const ct2 = (upstream.headers.get('content-type') || 'application/octet-stream').toLowerCase();
                         return { status: 200, body: text, headers: { 'Content-Type': ct2, ...corsHeaders } };
                     }
-                    const upstream = await fetch(cleanUrl, {
-                        headers: { 'User-Agent': getUA(), ...extraHeaders },
-                        redirect: 'follow',
-                    });
+                    const upstream = await fetchUpstream(cleanUrl, 0, extraHeaders);
                     const ct = (upstream.headers.get('content-type') || '').toLowerCase();
                     if (!upstream.ok) {
-                        const errBody = await upstream.text().catch(() => '');
                         return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
                     if (ct.includes('mpegurl') || ct.includes('m3u8')) {
@@ -730,7 +737,8 @@ async function handleRequest(req) {
                     const full = new Uint8Array(buf);
                     const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(cleanUrl);
                     const stripped = isTikTok && full[0] === 0x89 ? full.slice(120) : full;
-                    return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': ct || 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
+                    const finalCt = isTikTok ? 'video/MP2T' : (ct || 'video/MP2T');
+                    return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': finalCt, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
                 }
                 const upstream = await fetchUpstream(rawUrl);
                 const ct = (upstream.headers.get('content-type') || '').toLowerCase();

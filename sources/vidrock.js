@@ -38,23 +38,73 @@ async function fetchPage(url) {
     }
 }
 
-async function resolveUrl(url) {
-    if (!url.includes('hls2.vdrk.site')) return url;
-    try {
-        const data = await fetchPage(url);
-        if (!data || !Array.isArray(data)) return null;
-        for (const obj of data) {
-            if (!obj.url) continue;
-            if (obj.url.startsWith(PROXY_PREFIX)) {
-                const encodedPath = obj.url.slice(PROXY_PREFIX.length);
-                return decodeURIComponent(encodedPath.replace(/^\//, ''));
-            }
-            return obj.url;
-        }
-        return null;
-    } catch {
-        return null;
+function getStreamProxyHeaders(streamUrl) {
+    if (streamUrl.includes('hls2.vdrk.site') || streamUrl.includes('lok-lok.cc')) {
+        return {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://lok-lok.cc/',
+            'Origin': 'https://lok-lok.cc',
+        };
     }
+    if (streamUrl.includes('67streams')) {
+        return {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': BASE_URL,
+            'Origin': BASE_URL.replace(/\/$/, ''),
+        };
+    }
+    if (streamUrl.includes('hakunaymatata.com') || streamUrl.includes('storrrrrrm.site')) {
+        return {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': BASE_URL,
+            'Origin': BASE_URL.replace(/\/$/, ''),
+        };
+    }
+    return {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': BASE_URL,
+        'Origin': BASE_URL.replace(/\/$/, ''),
+    };
+}
+
+async function resolveUrl(url) {
+    if (url.includes('hls2.vdrk.site')) {
+        try {
+            const data = await fetchPage(url);
+            if (!data || !Array.isArray(data)) return null;
+            for (const obj of data) {
+                if (!obj.url) continue;
+                if (obj.url.startsWith(PROXY_PREFIX)) {
+                    const encodedPath = obj.url.slice(PROXY_PREFIX.length);
+                    return decodeURIComponent(encodedPath.replace(/^\//, ''));
+                }
+                return obj.url;
+            }
+            return null;
+        } catch {
+            return null;
+        }
+    }
+
+    if (url.includes('.workers.dev/')) {
+        try {
+            const workerPath = url.slice(url.indexOf('.workers.dev/') + '.workers.dev/'.length);
+            const decoded = decodeURIComponent(workerPath);
+            if (decoded.startsWith('http')) return decoded;
+        } catch {
+            return null;
+        }
+    }
+
+    return url;
 }
 
 async function getStream(id, s, e) {
@@ -70,7 +120,7 @@ async function getStream(id, s, e) {
             if (!stream?.url) continue;
             const resolved = await resolveUrl(stream.url);
             if (!resolved) continue;
-            return resolved;
+            return { url: resolved, headers: getStreamProxyHeaders(resolved) };
         }
 
         return null;
@@ -94,12 +144,46 @@ async function getSubtitles(id, s, e) {
     }
 }
 
+async function proxyStream(url, res, { fetchUpstream, rewriteM3u8 }) {
+    const proxyHeaders = getStreamProxyHeaders(url);
+    const upstream = await fetchUpstream(url, 0, proxyHeaders);
+    const ct = (upstream.headers['content-type'] || upstream.headers.get?.('content-type') || '').toLowerCase();
+    const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(url);
+    
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    if (isM3u8) {
+        const chunks = [];
+        for await (const c of upstream) chunks.push(c);
+        const body = Buffer.concat(chunks).toString('utf8');
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        return res.end(rewriteM3u8(body, url, '&vr=1'));
+    }
+
+    const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(url);
+    if (isTikTok) {
+        const chunks = [];
+        for await (const c of upstream) chunks.push(c);
+        const full = Buffer.concat(chunks);
+        const stripped = full[0] === 0x89 ? full.slice(120) : full;
+        res.setHeader('Content-Type', 'video/MP2T');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.end(stripped);
+    }
+
+    res.setHeader('Content-Type', ct || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    upstream.pipe(res);
+}
+
 export const PROXY_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
     'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': BASE_URL,
+    'Origin': 'https://vidrock.net',
 };
 
 export const VERIFY_HEADERS = { ...PROXY_HEADERS };
 
-export { getStream, getSubtitles, HEADERS, BASE_URL };
+export { getStream, getSubtitles, proxyStream, HEADERS, BASE_URL };
