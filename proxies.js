@@ -1,41 +1,52 @@
-import { PROXY_LIST_URL } from './config.js';
+const getStaticProxies = () => {
+    const u = process.env.WEBSHARE_USERNAME;
+    const p = process.env.WEBSHARE_PASSWORD;
+    return [
+        { ip: '31.59.20.176', port: '6754', username: u, password: p, protocol: 'http' },
+        { ip: '31.56.127.193', port: '7684', username: u, password: p, protocol: 'http' },
+        { ip: '45.38.107.97', port: '6014', username: u, password: p, protocol: 'http' },
+        { ip: '107.172.163.27', port: '6543', username: u, password: p, protocol: 'http' },
+        { ip: '198.23.243.226', port: '6361', username: u, password: p, protocol: 'http' },
+        { ip: '216.10.27.159', port: '6837', username: u, password: p, protocol: 'http' },
+        { ip: '142.111.67.146', port: '5611', username: u, password: p, protocol: 'http' },
+        { ip: '191.96.254.138', port: '6185', username: u, password: p, protocol: 'http' },
+        { ip: '31.58.9.4', port: '6077', username: u, password: p, protocol: 'http' },
+        { ip: '23.229.19.94', port: '8689', username: u, password: p, protocol: 'http' },
+    ];
+};
 
 const proxyPool = { list: [], fetchedAt: 0 };
 
 export async function getProxies() {
     if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
-    try {
-        const res = await fetch(PROXY_LIST_URL, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36' }
-        });
-        if (!res.ok) throw new Error(`proxy list fetch failed: ${res.status}`);
-        const contentType = res.headers.get('content-type') || '';
-        if (contentType.includes('application/json')) {
+    const apiKey = process.env.WEBSHARE_API_KEY;
+    if (apiKey) {
+        try {
+            const res = await fetch('https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25', {
+                headers: { 'Authorization': `Token ${apiKey}` }
+            });
+            if (!res.ok) throw new Error(`webshare API failed: ${res.status}`);
             const json = await res.json();
-            proxyPool.list = (json.data || []).filter(p =>
-                p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
-                p.upTime >= 80 &&
-                p.responseTime < 5000
-            ).map(p => ({
-                ip: p.ip,
-                port: p.port,
-                protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr))
+            const parsed = (json.results || []).map(p => ({
+                ip: p.proxy_address,
+                port: String(p.port),
+                username: p.username,
+                password: p.password,
+                protocol: 'http',
             }));
-        } else {
-            const text = await res.text();
-            proxyPool.list = text.split('\n')
-                .map(l => l.trim())
-                .filter(l => /^\d+\.\d+\.\d+\.\d+:\d+$/.test(l))
-                .map(l => {
-                    const [ip, port] = l.split(':');
-                    return { ip, port, protocol: 'http' };
-                });
+            if (parsed.length) {
+                proxyPool.list = parsed;
+                proxyPool.fetchedAt = Date.now();
+                proxyPool.lastError = null;
+                return proxyPool.list;
+            }
+        } catch (err) {
+            proxyPool.lastError = err.message;
         }
-        proxyPool.fetchedAt = Date.now();
-        proxyPool.lastError = null;
-    } catch (err) {
-        proxyPool.lastError = err.message;
     }
+    proxyPool.list = getStaticProxies();
+    proxyPool.fetchedAt = Date.now();
+    if (!apiKey) proxyPool.lastError = 'WEBSHARE_API_KEY not set, using static fallback';
     return proxyPool.list;
 }
 
@@ -66,9 +77,10 @@ export async function fetchWithProxyFallback(url, options = {}) {
 
 export async function fetchViaProxy(url, proxy, options = {}) {
     try {
+        const auth = proxy.username && proxy.password ? `${proxy.username}:${proxy.password}@` : '';
         if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
             const { SocksProxyAgent } = await import('socks-proxy-agent');
-            const agent = new SocksProxyAgent(`${proxy.protocol}://${proxy.ip}:${proxy.port}`);
+            const agent = new SocksProxyAgent(`${proxy.protocol}://${auth}${proxy.ip}:${proxy.port}`);
             const https = await import('https');
             const http = await import('http');
             const { URL } = await import('url');
@@ -105,7 +117,7 @@ export async function fetchViaProxy(url, proxy, options = {}) {
             });
         } else {
             const { ProxyAgent } = await import('undici');
-            const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
+            const dispatcher = new ProxyAgent(`http://${auth}${proxy.ip}:${proxy.port}`);
             return fetch(url, { ...options, dispatcher });
         }
     } catch {
