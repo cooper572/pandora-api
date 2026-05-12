@@ -8,6 +8,8 @@ import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES }
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
 
+import { getProxies, fetchViaProxy, getProxyPoolInfo } from './proxies.js';
+
 const ALL_SOURCE_MODULES = Object.fromEntries(
     await Promise.all(
         SOURCES.map(async cfg => {
@@ -51,43 +53,6 @@ function getCached(key, fn) {
 
 const jitter = (ms) => new Promise(r => setTimeout(r, Math.random() * ms));
 
-const proxyPool = { list: [], fetchedAt: 0 };
-
-async function getProxies() {
-    if (proxyPool.list.length && Date.now() - proxyPool.fetchedAt < 10 * 60 * 1000) return proxyPool.list;
-    try {
-        const listUrl = process.env.PROXY_LIST_URL || 'https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc';
-        const res = await fetch(listUrl, { headers: { 'User-Agent': getUA() } });
-        if (!res.ok) throw new Error(`proxy list ${res.status}`);
-        const json = await res.json();
-        proxyPool.list = (json.data || []).filter(p =>
-            p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
-            p.upTime >= 80 &&
-            p.responseTime < 5000
-        ).map(p => ({ ip: p.ip, port: p.port, protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) }));
-        proxyPool.fetchedAt = Date.now();
-    } catch { }
-    return proxyPool.list;
-}
-
-function pickProxy(proxies) {
-    return proxies[Math.floor(Math.random() * proxies.length)] || null;
-}
-
-async function fetchViaProxy(url, proxy, extraHeaders = {}) {
-    const { ProxyAgent } = await import('undici');
-    const proxyUrl = (proxy.protocol === 'socks4' || proxy.protocol === 'socks5')
-        ? null
-        : `http://${proxy.ip}:${proxy.port}`;
-    if (!proxyUrl) return null;
-    const dispatcher = new ProxyAgent(proxyUrl);
-    return fetch(url, {
-        headers: { 'User-Agent': getUA(), ...extraHeaders },
-        redirect: 'manual',
-        dispatcher,
-    });
-}
-
 async function withRetry(fn, attempts = 3, delay = 1000) {
     let lastError;
     for (let i = 0; i < attempts; i++) {
@@ -123,8 +88,7 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}, _proxyAttemp
     } catch (fetchErr) {
         if (!_proxyAttempt) {
             const proxies = await getProxies();
-            const proxy = pickProxy(proxies);
-            if (proxy) {
+            const proxy = proxies[Math.floor(Math.random() * proxies.length)] || null; if (proxy) {
                 try {
                     const pRes = await fetchViaProxy(httpsUrl, proxy, extraHeaders);
                     if (pRes && pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
@@ -139,23 +103,29 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}, _proxyAttemp
         }
         throw fetchErr;
     }
+
     if ((res.status === 403 || res.status === 429) && !_proxyAttempt) {
         res.body?.cancel();
         const proxies = await getProxies();
-        const proxy = pickProxy(proxies);
-        if (proxy) {
+        const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
+        for (const proxy of shuffled) {
             try {
-                const pRes = await fetchViaProxy(httpsUrl, proxy, extraHeaders);
-                if (pRes && pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
+                const pRes = await Promise.race([
+                    fetchViaProxy(httpsUrl, proxy, extraHeaders),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
+                ]);
+                if (!pRes) continue;
+                if (pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
                     pRes.body?.cancel();
                     const location = pRes.headers.get('location');
                     const next = new URL(location, httpsUrl).href.replace('http://', 'https://');
                     return fetchUpstream(next, redirects + 1, extraHeaders, true);
                 }
-                if (pRes) return pRes;
+                if (pRes.status !== 403 && pRes.status !== 429) return pRes;
             } catch { }
         }
     }
+    
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         res.body?.cancel();
         const location = res.headers.get('location');
@@ -687,6 +657,60 @@ async function handleRequest(req) {
     if (downloadsTvMatch) {
         const [, id, season, episode] = downloadsTvMatch;
         return handleDownloadTv(id, season, episode, corsHeaders);
+    }
+
+    if (pathname === '/api/debug/proxies') {
+        const result = { source: process.env.PROXY_LIST_URL || 'default', fetched: 0, after_filter: 0, tests: [], sample: [] };
+        try {
+            const listUrl = process.env.PROXY_LIST_URL || 'https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc';
+            const res = await fetch(listUrl, {
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            result.list_fetch_status = res.status;
+            result.list_content_type = res.headers.get('content-type');
+            const raw = await res.text();
+            result.raw_preview = raw.slice(0, 500);
+            result.raw_length = raw.length;
+            const lines = raw.split('\n').map(l => l.replace(/\r/g, '').trim()).filter(l => /^\d+\.\d+\.\d+\.\d+:\d+$/.test(l));
+            result.lines_parsed = lines.length;
+            result.lines_sample = lines.slice(0, 5);
+
+            const proxies = await getProxies();
+            result.fetched = proxies.length;
+            result.fetch_error = getProxyPoolInfo().lastError;
+
+            const targets = [
+                'https://vidrock.net/',
+                'https://vixsrc.to/',
+                'https://sf.streammafia.to/',
+                'https://api.videasy.net/',
+            ];
+
+            result.after_filter = proxies.length;
+            const testProxies = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
+            result.sample = testProxies.map(p => `${p.protocol}://${p.ip}:${p.port}`);
+
+            result.tests = await Promise.all(testProxies.map(async proxy => {
+                const proxyStr = `${proxy.protocol}://${proxy.ip}:${proxy.port}`;
+                const targetResults = await Promise.all(targets.map(async url => {
+                    try {
+                        const r = await Promise.race([
+                            fetchViaProxy(url, proxy, { headers: { 'User-Agent': getUA() } }),
+                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
+                        ]);
+                        if (!r) return { url, ok: false, error: 'null response' };
+                        r.body?.cancel?.();
+                        return { url, ok: r.ok || r.status === 301 || r.status === 302 || r.status === 200, status: r.status };
+                    } catch (err) {
+                        return { url, ok: false, error: err.message };
+                    }
+                }));
+                return { proxy: proxyStr, targets: targetResults };
+            }));
+        } catch (err) {
+            result.error = err.message;
+        }
+        return { status: 200, body: JSON.stringify(result, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
     if (pathname === '/api/debug/reach') {

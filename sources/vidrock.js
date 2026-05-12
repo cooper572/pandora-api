@@ -149,9 +149,9 @@ async function proxyStream(url, res, { fetchUpstream, rewriteM3u8 }) {
     const upstream = await fetchUpstream(url, 0, proxyHeaders);
     const ct = (upstream.headers['content-type'] || upstream.headers.get?.('content-type') || '').toLowerCase();
     const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(url);
-    
+
     res.setHeader('Access-Control-Allow-Origin', '*');
-    
+
     if (isM3u8) {
         const chunks = [];
         for await (const c of upstream) chunks.push(c);

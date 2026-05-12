@@ -32,7 +32,10 @@ export async function getProxies() {
                 });
         }
         proxyPool.fetchedAt = Date.now();
-    } catch { }
+        proxyPool.lastError = null;
+    } catch (err) {
+        proxyPool.lastError = err.message;
+    }
     return proxyPool.list;
 }
 
@@ -106,4 +109,8 @@ export async function fetchViaProxy(url, proxy, options = {}) {
     } catch {
         return null;
     }
+}
+
+export function getProxyPoolInfo() {
+    return { count: proxyPool.list.length, lastError: proxyPool.lastError || null };
 }
