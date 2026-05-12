@@ -6,7 +6,7 @@ export const SOURCES = [
     { key: 'cinesu', sourceFile: 'cinesu', label: 'CineSu', proxyParam: 'cs', timeout: 15000, jitter: 500, retries: 2 },
     { key: 'vixsrc', sourceFile: 'vixsrc', label: 'VixSrc', proxyParam: 'vx', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'vidlink', sourceFile: 'vidlink', label: 'VidLink', proxyParam: 'vl', timeout: 25000, jitter: 500, retries: 2 },
-    { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 20000, jitter: 600, retries: 2, skipProxy: true },
+    { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 35000, jitter: 600, retries: 1 },
     { key: 'meowtv', sourceFile: 'meowtv', label: 'MeowTV', proxyParam: 'mt', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'icefy', sourceFile: 'icefy', label: 'Icefy', proxyParam: 'iy', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 5000 },
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 20000, jitter: 900, retries: 3, sourcesTimeout: 5000 },

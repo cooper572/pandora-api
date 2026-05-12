@@ -8,6 +8,31 @@ import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES }
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
 
+async function umamiTrack(event, data = {}) {
+    try {
+        await fetch('https://cloud.umami.is/api/send', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'stream-api/1.0',
+            },
+            body: JSON.stringify({
+                payload: {
+                    website: 'fdeaba2a-4820-45ec-9f57-6e0b85758b46',
+                    name: event,
+                    data,
+                    language: 'en-US',
+                    title: event,
+                    url: `/${event}`,
+                    hostname: 'stream-api',
+                },
+                type: 'event',
+            }),
+            signal: AbortSignal.timeout(3000),
+        });
+    } catch { }
+}
+
 const ALL_SOURCE_MODULES = Object.fromEntries(
     await Promise.all(
         SOURCES.map(async cfg => {
@@ -149,7 +174,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null) {
             )
         ),
         cfg.timeout
-    );
+    ).then(r => r);
 }
 
 function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
@@ -176,16 +201,14 @@ async function verifyStream(rawUrl, sourceKey) {
     if (mod.SKIP_VERIFY) return true;
     const headers = { 'User-Agent': getUA(), ...(mod.VERIFY_HEADERS || {}) };
     try {
-        const res = await Promise.race([
-            fetchUpstream(rawUrl, 0, headers),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
-        ]);
-        if (res.status >= 400) { res.body?.cancel(); return false; }
-        const text = await Promise.race([
-            res.text(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('text timeout')), 5000))
-        ]);
-        return text.trim().startsWith('#EXTM3U');
+        const res = await fetch(rawUrl, {
+            method: 'HEAD',
+            headers,
+            redirect: 'follow',
+            signal: AbortSignal.timeout(6000),
+        });
+        res.body?.cancel();
+        return res.status < 400;
     } catch { return false; }
 }
 
@@ -417,6 +440,7 @@ async function handleRequest(req) {
                 ])
             ]);
             if (!sources.length) return { status: 502, body: JSON.stringify({ error: 'no working sources found' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+            umamiTrack('movie', { id, sources: sources.length });
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
@@ -438,6 +462,7 @@ async function handleRequest(req) {
                 ])
             ]);
             if (!sources.length) return { status: 502, body: JSON.stringify({ error: 'no working sources found' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+            umamiTrack('tv', { id, s, e, sources: sources.length });
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
@@ -445,12 +470,31 @@ async function handleRequest(req) {
     }
 
     const subtitleMovieMatch = pathname.match(/^\/api\/subtitles\/movie\/([^/]+)$/);
-    if (subtitleMovieMatch) return handleSubtitleMovie(subtitleMovieMatch[1], corsHeaders);
+    if (subtitleMovieMatch) {
+        umamiTrack('subtitles-movie', { id: subtitleMovieMatch[1] });
+        return handleSubtitleMovie(subtitleMovieMatch[1], corsHeaders);
+    }
 
     const subtitleTvMatch = pathname.match(/^\/api\/subtitles\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if (subtitleTvMatch) {
         const [, id, season, episode] = subtitleTvMatch;
+        umamiTrack('subtitles-tv', { id, season, episode });
         return handleSubtitleTv(id, season, episode, corsHeaders);
+    }
+
+    const debugMatch = pathname.match(/^\/api\/debug\/([^/]+)$/);
+    if (debugMatch) {
+        const id = debugMatch[1];
+        const s = q.season || q.s || null;
+        const e = q.episode || q.e || null;
+        const mod = SOURCE_MODULES['02movie'];
+        const t0 = Date.now();
+        try {
+            const result = await mod.getStream(id, s, e);
+            return { status: 200, body: JSON.stringify({ result, elapsed_ms: Date.now() - t0 }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+        } catch (err) {
+            return { status: 200, body: JSON.stringify({ error: err.message, elapsed_ms: Date.now() - t0 }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+        }
     }
 
     const testMatch = pathname.match(/^\/api\/test\/([^/]+)$/);
@@ -463,6 +507,8 @@ async function handleRequest(req) {
             return { status: 400, body: JSON.stringify({ error: 'invalid or missing source' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         }
         const result = await handleTestSource(source, id, s, e, clientIP, reqUrl.host);
+        const parsed = JSON.parse(result.body);
+        umamiTrack('test', { source, id, s, e, ok: parsed.ok, elapsed_ms: parsed.elapsed_ms });
         return { status: result.status, body: result.body, headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
@@ -501,6 +547,7 @@ async function handleRequest(req) {
                     } catch { }
                     delete extraHeaders['Host'];
                     delete extraHeaders['host'];
+                    umamiTrack('proxy', { source: matchedSource.key, url: cleanUrl.slice(0, 100) });
                     if (/workers\.dev/i.test(cleanUrl)) {
                         delete extraHeaders['Referer'];
                         delete extraHeaders['Origin'];
@@ -530,7 +577,6 @@ async function handleRequest(req) {
                     });
                     const ct = (upstream.headers.get('content-type') || '').toLowerCase();
                     if (!upstream.ok) {
-                        const errBody = await upstream.text().catch(() => '');
                         return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
                     if (ct.includes('mpegurl') || ct.includes('m3u8')) {
@@ -538,11 +584,30 @@ async function handleRequest(req) {
                         const rewritten = rewriteM3u8(text, cleanUrl, `&${cfg.proxyParam}=1`, `https://${reqUrl.host}`);
                         return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                     }
-                    const buf = await upstream.arrayBuffer();
-                    const full = new Uint8Array(buf);
                     const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(cleanUrl);
-                    const stripped = isTikTok && full[0] === 0x89 ? full.slice(120) : full;
-                    return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': ct || 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
+                    const isMkv = cleanUrl.includes('.mkv') || ct.includes('matroska') || ct.includes('x-matroska');
+                    if (isTikTok) {
+                        const buf = await upstream.arrayBuffer();
+                        const full = new Uint8Array(buf);
+                        const stripped = full[0] === 0x89 ? full.slice(120) : full;
+                        return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': ct || 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
+                    }
+                    const finalCt = isMkv ? 'video/mp4' : (ct || 'application/octet-stream');
+                    const rangeHeader = req.headers['range'];
+                    const streamUpstream = rangeHeader ? await fetch(cleanUrl, {
+                        headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': rangeHeader },
+                        redirect: 'follow',
+                    }) : upstream;
+                    const streamStatus = rangeHeader && streamUpstream.status === 206 ? 206 : 200;
+                    const responseHeaders = {
+                        'Content-Type': finalCt,
+                        'Accept-Ranges': 'bytes',
+                        'Access-Control-Allow-Origin': '*',
+                        'Cache-Control': 'no-store',
+                    };
+                    if (streamUpstream.headers.get('content-length')) responseHeaders['Content-Length'] = streamUpstream.headers.get('content-length');
+                    if (streamUpstream.headers.get('content-range')) responseHeaders['Content-Range'] = streamUpstream.headers.get('content-range');
+                    return { status: streamStatus, stream: streamUpstream.body, headers: responseHeaders };
                 }
                 const upstream = await fetchUpstream(rawUrl);
                 const ct = (upstream.headers.get('content-type') || '').toLowerCase();
@@ -587,11 +652,15 @@ async function handleRequest(req) {
     }
 
     const downloadsMovieMatch = pathname.match(/^\/api\/downloads\/movie\/([^/]+)$/);
-    if (downloadsMovieMatch) return handleDownloadMovie(downloadsMovieMatch[1], corsHeaders);
+    if (downloadsMovieMatch) {
+        umamiTrack('downloads-movie', { id: downloadsMovieMatch[1] });
+        return handleDownloadMovie(downloadsMovieMatch[1], corsHeaders);
+    }
 
     const downloadsTvMatch = pathname.match(/^\/api\/downloads\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if (downloadsTvMatch) {
         const [, id, season, episode] = downloadsTvMatch;
+        umamiTrack('downloads-tv', { id, season, episode });
         return handleDownloadTv(id, season, episode, corsHeaders);
     }
 

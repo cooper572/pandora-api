@@ -3,6 +3,8 @@
 const BASE = 'https://02movie.com';
 const DOWNLOADER_BASE = 'https://02moviedownloader.site';
 
+export const SKIP_VERIFY = true;
+
 const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/json',
@@ -68,7 +70,7 @@ async function fetchDownloaderServer3(id, s, e) {
             'Origin': DOWNLOADER_BASE,
             'Referer': `${DOWNLOADER_BASE}/api/download/${s && e ? `tv/${id}/${s}/${e}` : `movie/${id}`}`,
         },
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(10000),
     });
 
     if (!tokenRes.ok) {
@@ -94,7 +96,7 @@ async function fetchDownloaderServer3(id, s, e) {
             'Referer': `${DOWNLOADER_BASE}${downloadPath}`,
             'x-session-token': token,
         },
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(12000),
     });
 
     if (!dlRes.ok) {
@@ -214,23 +216,28 @@ export async function getStream(id, s, e) {
     const server1 = primary.status === 'fulfilled' ? extractOptions(primary.value, 1) : [];
     const server2 = fallback.status === 'fulfilled' ? extractOptions(fallback.value, 2) : [];
     const server3 = downloader.status === 'fulfilled' ? extractDownloaderOptions(downloader.value) : [];
+
     const all = [...server1, ...server2, ...server3];
+    if (!all.length) return null;
 
-    for (const option of all) {
-        try {
-            const res = await fetch(option.url, {
-                method: 'HEAD',
-                headers: { 'User-Agent': HEADERS['User-Agent'] },
-                signal: AbortSignal.timeout(6000),
-                redirect: 'follow',
-            });
-            if (res.ok) return option.url;
-        } catch {
-            continue;
-        }
-    }
+    const results = await Promise.allSettled(
+        all.map(option =>
+            option.server === 3
+                ? Promise.resolve(option.url)
+                : fetch(option.url, {
+                    method: 'HEAD',
+                    headers: { 'User-Agent': HEADERS['User-Agent'] },
+                    signal: AbortSignal.timeout(6000),
+                    redirect: 'follow',
+                }).then(res => {
+                    if (res.status >= 400 && res.status !== 405) throw new Error('not ok');
+                    return option.url;
+                })
+        )
+    );
 
-    return null;
+    const hit = results.find(r => r.status === 'fulfilled');
+    return hit ? hit.value : null;
 }
 
 async function verifyDownload(url) {
@@ -241,7 +248,7 @@ async function verifyDownload(url) {
             signal: AbortSignal.timeout(8000),
             redirect: 'follow',
         });
-        return res.ok;
+        return res.status < 400 || res.status === 405;
     } catch {
         return false;
     }
