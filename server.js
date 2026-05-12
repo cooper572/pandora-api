@@ -61,10 +61,10 @@ async function getProxies() {
         if (!res.ok) throw new Error(`proxy list ${res.status}`);
         const json = await res.json();
         proxyPool.list = (json.data || []).filter(p =>
-            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
             p.upTime >= 80 &&
             p.responseTime < 5000
-        ).map(p => ({ ip: p.ip, port: p.port, protocol: p.protocols.find(pr => pr === 'http' || pr === 'https') }));
+        ).map(p => ({ ip: p.ip, port: p.port, protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) }));
         proxyPool.fetchedAt = Date.now();
     } catch { }
     return proxyPool.list;
@@ -487,7 +487,7 @@ async function handleRequest(req) {
         const result = await handleHealth(SOURCE_MODULES, cache, verifyStream);
         return { status: result.status, body: result.body, headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
-    
+
     if (pathname === '/api/movie') {
         const { id } = q;
         if (!id) return { status: 400, body: JSON.stringify({ error: 'missing id' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
@@ -687,6 +687,30 @@ async function handleRequest(req) {
     if (downloadsTvMatch) {
         const [, id, season, episode] = downloadsTvMatch;
         return handleDownloadTv(id, season, episode, corsHeaders);
+    }
+
+    if (pathname === '/api/debug/reach') {
+        const targets = [
+            'https://vidrock.net/',
+            'https://api.videasy.net/',
+            'https://www.vidking.net/',
+            'https://vixsrc.to/',
+            'https://sf.streammafia.to/',
+            'https://vsembed.ru/',
+        ];
+        const results = await Promise.all(targets.map(async url => {
+            try {
+                const r = await Promise.race([
+                    fetch(url, { headers: { 'User-Agent': getUA() }, redirect: 'manual' }),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
+                ]);
+                r.body?.cancel();
+                return { url, ok: true, status: r.status };
+            } catch (err) {
+                return { url, ok: false, error: err.message };
+            }
+        }));
+        return { status: 200, body: JSON.stringify(results, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
     if (pathname === '/api/sources') {

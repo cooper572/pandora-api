@@ -11,10 +11,14 @@ export async function getProxies() {
         if (!res.ok) throw new Error(`proxy list fetch failed: ${res.status}`);
         const json = await res.json();
         proxyPool.list = (json.data || []).filter(p =>
-            p.protocols?.some(pr => pr === 'http' || pr === 'https') &&
+            p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
             p.upTime >= 80 &&
             p.responseTime < 5000
-        ).map(p => ({ ip: p.ip, port: p.port }));
+        ).map(p => ({
+            ip: p.ip,
+            port: p.port,
+            protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr))
+        }));
         proxyPool.fetchedAt = Date.now();
     } catch { }
     return proxyPool.list;
@@ -30,12 +34,55 @@ export async function fetchWithProxyFallback(url, options = {}) {
         const proxies = await getProxies();
         if (!proxies.length) return null;
         const proxy = proxies[Math.floor(Math.random() * proxies.length)];
-        try {
+        return fetchViaProxy(url, proxy, options);
+    }
+}
+
+export async function fetchViaProxy(url, proxy, options = {}) {
+    try {
+        if (proxy.protocol === 'socks4' || proxy.protocol === 'socks5') {
+            const { SocksProxyAgent } = await import('socks-proxy-agent');
+            const agent = new SocksProxyAgent(`${proxy.protocol}://${proxy.ip}:${proxy.port}`);
+            const https = await import('https');
+            const http = await import('http');
+            const { URL } = await import('url');
+            const parsed = new URL(url);
+            const isHttps = parsed.protocol === 'https:';
+            return new Promise((resolve, reject) => {
+                const reqLib = isHttps ? https : http;
+                const req = reqLib.request({
+                    host: parsed.hostname,
+                    port: parsed.port || (isHttps ? 443 : 80),
+                    path: parsed.pathname + parsed.search,
+                    method: options.method || 'GET',
+                    headers: options.headers || {},
+                    agent,
+                }, (res) => {
+                    const chunks = [];
+                    res.on('data', c => chunks.push(c));
+                    res.on('end', () => {
+                        const body = Buffer.concat(chunks);
+                        resolve({
+                            ok: res.statusCode >= 200 && res.statusCode < 300,
+                            status: res.statusCode,
+                            headers: { get: (h) => res.headers[h.toLowerCase()] },
+                            text: () => Promise.resolve(body.toString('utf8')),
+                            json: () => Promise.resolve(JSON.parse(body.toString('utf8'))),
+                            arrayBuffer: () => Promise.resolve(body.buffer),
+                            body: null,
+                        });
+                    });
+                    res.on('error', reject);
+                });
+                req.on('error', reject);
+                req.end();
+            });
+        } else {
             const { ProxyAgent } = await import('undici');
             const dispatcher = new ProxyAgent(`http://${proxy.ip}:${proxy.port}`);
-            return await fetch(url, { ...options, dispatcher });
-        } catch {
-            return null;
+            return fetch(url, { ...options, dispatcher });
         }
+    } catch {
+        return null;
     }
 }
