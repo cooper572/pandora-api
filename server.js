@@ -88,16 +88,21 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}, _proxyAttemp
     } catch (fetchErr) {
         if (!_proxyAttempt) {
             const proxies = await getProxies();
-            const proxy = proxies[Math.floor(Math.random() * proxies.length)] || null; if (proxy) {
+            const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
+            for (const proxy of shuffled) {
                 try {
-                    const pRes = await fetchViaProxy(httpsUrl, proxy, extraHeaders);
-                    if (pRes && pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
+                    const pRes = await Promise.race([
+                        fetchViaProxy(httpsUrl, proxy, extraHeaders),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
+                    ]);
+                    if (!pRes) continue;
+                    if (pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
                         pRes.body?.cancel();
                         const location = pRes.headers.get('location');
                         const next = new URL(location, httpsUrl).href.replace('http://', 'https://');
                         return fetchUpstream(next, redirects + 1, extraHeaders, true);
                     }
-                    if (pRes) return pRes;
+                    if (pRes.status !== 403 && pRes.status !== 429) return pRes;
                 } catch { }
             }
         }
@@ -125,7 +130,7 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}, _proxyAttemp
             } catch { }
         }
     }
-    
+
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         res.body?.cancel();
         const location = res.headers.get('location');
