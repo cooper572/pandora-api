@@ -9,16 +9,28 @@ export async function getProxies() {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36' }
         });
         if (!res.ok) throw new Error(`proxy list fetch failed: ${res.status}`);
-        const json = await res.json();
-        proxyPool.list = (json.data || []).filter(p =>
-            p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
-            p.upTime >= 80 &&
-            p.responseTime < 5000
-        ).map(p => ({
-            ip: p.ip,
-            port: p.port,
-            protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr))
-        }));
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+            const json = await res.json();
+            proxyPool.list = (json.data || []).filter(p =>
+                p.protocols?.some(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr)) &&
+                p.upTime >= 80 &&
+                p.responseTime < 5000
+            ).map(p => ({
+                ip: p.ip,
+                port: p.port,
+                protocol: p.protocols.find(pr => ['http', 'https', 'socks4', 'socks5'].includes(pr))
+            }));
+        } else {
+            const text = await res.text();
+            proxyPool.list = text.split('\n')
+                .map(l => l.trim())
+                .filter(l => /^\d+\.\d+\.\d+\.\d+:\d+$/.test(l))
+                .map(l => {
+                    const [ip, port] = l.split(':');
+                    return { ip, port, protocol: 'http' };
+                });
+        }
         proxyPool.fetchedAt = Date.now();
     } catch { }
     return proxyPool.list;
@@ -33,8 +45,17 @@ export async function fetchWithProxyFallback(url, options = {}) {
     } catch {
         const proxies = await getProxies();
         if (!proxies.length) return null;
-        const proxy = proxies[Math.floor(Math.random() * proxies.length)];
-        return fetchViaProxy(url, proxy, options);
+        const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
+        for (const proxy of shuffled) {
+            try {
+                const r = await Promise.race([
+                    fetchViaProxy(url, proxy, options),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
+                ]);
+                if (r && r.ok) return r;
+            } catch { }
+        }
+        return null;
     }
 }
 
