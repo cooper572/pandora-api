@@ -440,8 +440,7 @@ async function handleRequest(req) {
                     { base: SUBTITLE_BASES[2], path: `/movie/tt${id}` }
                 ])
             ]);
-            if (!sources.length) return { status: 502, body: JSON.stringify({ error: 'no working sources found' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
-            umamiTrack('movie', { id, sources: sources.length });
+            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } }; umamiTrack('movie', { id, sources: sources.length });
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
@@ -462,8 +461,7 @@ async function handleRequest(req) {
                     { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${s}/${e}` }
                 ])
             ]);
-            if (!sources.length) return { status: 502, body: JSON.stringify({ error: 'no working sources found' }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
-            umamiTrack('tv', { id, s, e, sources: sources.length });
+            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } }; umamiTrack('tv', { id, s, e, sources: sources.length });
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
