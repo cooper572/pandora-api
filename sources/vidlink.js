@@ -15,8 +15,6 @@ export const VERIFY_HEADERS = {
     Origin: ORIGIN,
 };
 
-export const SKIP_VERIFY = true;
-
 let bootPromise = null;
 
 function bootWasm() {
@@ -60,5 +58,14 @@ export async function getStream(id, s, e) {
     const data = await res.json();
     const playlist = data?.stream?.playlist;
     if (!playlist) throw new Error('no playlist in response');
-    return playlist;
+
+    const playlistUrl = new URL(playlist);
+    playlistUrl.searchParams.delete('headers');
+    playlistUrl.searchParams.delete('host');
+    const cleanPlaylist = playlistUrl.toString();
+
+    return {
+        url: cleanPlaylist,
+        headers: { Referer: REFERER, Origin: ORIGIN },
+    };
 }
