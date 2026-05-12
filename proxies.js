@@ -48,14 +48,16 @@ export async function fetchWithProxyFallback(url, options = {}) {
     } catch {
         const proxies = await getProxies();
         if (!proxies.length) return null;
-        const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
+        const shuffled = [...proxies].sort(() => Math.random() - 0.5).slice(0, 5);
         for (const proxy of shuffled) {
             try {
                 const r = await Promise.race([
                     fetchViaProxy(url, proxy, options),
                     new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
                 ]);
-                if (r && r.ok) return r;
+                if (!r) continue;
+                if (r.status === 403 || r.status === 429) { r.body?.cancel?.(); continue; }
+                return r;
             } catch { }
         }
         return null;
