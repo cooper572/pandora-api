@@ -665,24 +665,22 @@ async function handleRequest(req) {
     }
 
     if (pathname === '/api/debug/proxies') {
-        const result = { source: process.env.PROXY_LIST_URL || 'default', fetched: 0, after_filter: 0, tests: [], sample: [] };
+        const result = {
+            source: process.env.WEBSHARE_DOWNLOAD_URL ? 'webshare_download_url' : 'static_fallback',
+            username: process.env.WEBSHARE_USERNAME || null,
+            password_set: !!process.env.WEBSHARE_PASSWORD,
+            fetched: 0,
+            fetch_error: null,
+            sample: [],
+            tests: [],
+        };
         try {
-            const listUrl = process.env.PROXY_LIST_URL || 'https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc';
-            const res = await fetch(listUrl, {
-                headers: { 'User-Agent': 'Mozilla/5.0' }
-            });
-            result.list_fetch_status = res.status;
-            result.list_content_type = res.headers.get('content-type');
-            const raw = await res.text();
-            result.raw_preview = raw.slice(0, 500);
-            result.raw_length = raw.length;
-            const lines = raw.split('\n').map(l => l.replace(/\r/g, '').trim()).filter(l => /^\d+\.\d+\.\d+\.\d+:\d+$/.test(l));
-            result.lines_parsed = lines.length;
-            result.lines_sample = lines.slice(0, 5);
-
             const proxies = await getProxies();
             result.fetched = proxies.length;
             result.fetch_error = getProxyPoolInfo().lastError;
+            result.sample = proxies.slice(0, 5).map(p =>
+                `${p.protocol}://${p.username ? p.username + ':***@' : ''}${p.ip}:${p.port}`
+            );
 
             const targets = [
                 'https://vidrock.net/',
@@ -691,12 +689,9 @@ async function handleRequest(req) {
                 'https://api.videasy.net/',
             ];
 
-            result.after_filter = proxies.length;
-            const testProxies = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
-            result.sample = testProxies.map(p => `${p.protocol}://${p.ip}:${p.port}`);
-
+            const testProxies = [...proxies].sort(() => Math.random() - 0.5).slice(0, 3);
             result.tests = await Promise.all(testProxies.map(async proxy => {
-                const proxyStr = `${proxy.protocol}://${proxy.ip}:${proxy.port}`;
+                const proxyLabel = `${proxy.protocol}://${proxy.username ? proxy.username + ':***@' : ''}${proxy.ip}:${proxy.port}`;
                 const targetResults = await Promise.all(targets.map(async url => {
                     try {
                         const r = await Promise.race([
@@ -710,36 +705,12 @@ async function handleRequest(req) {
                         return { url, ok: false, error: err.message };
                     }
                 }));
-                return { proxy: proxyStr, targets: targetResults };
+                return { proxy: proxyLabel, targets: targetResults };
             }));
         } catch (err) {
             result.error = err.message;
         }
         return { status: 200, body: JSON.stringify(result, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
-    }
-
-    if (pathname === '/api/debug/reach') {
-        const targets = [
-            'https://vidrock.net/',
-            'https://api.videasy.net/',
-            'https://www.vidking.net/',
-            'https://vixsrc.to/',
-            'https://sf.streammafia.to/',
-            'https://vsembed.ru/',
-        ];
-        const results = await Promise.all(targets.map(async url => {
-            try {
-                const r = await Promise.race([
-                    fetch(url, { headers: { 'User-Agent': getUA() }, redirect: 'manual' }),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
-                ]);
-                r.body?.cancel();
-                return { url, ok: true, status: r.status };
-            } catch (err) {
-                return { url, ok: false, error: err.message };
-            }
-        }));
-        return { status: 200, body: JSON.stringify(results, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
     if (pathname === '/api/sources') {
