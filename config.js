@@ -10,7 +10,7 @@ export const SOURCES = [
     { key: 'meowtv', sourceFile: 'meowtv', label: 'MeowTV', proxyParam: 'mt', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'icefy', sourceFile: 'icefy', label: 'Icefy', proxyParam: 'iy', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 5000 },
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 20000, jitter: 900, retries: 3, sourcesTimeout: 5000 },
-    { key: 'streammafia', sourceFile: 'streammafia', label: 'MafiaEmbed', proxyParam: 'sm', timeout: 25000, jitter: 600, retries: 2 },
+    { key: 'streammafia', sourceFile: 'streammafia', label: 'streammafia', proxyParam: 'sm', timeout: 25000, jitter: 600, retries: 2 },
     { key: 'vidking', sourceFile: 'vidking', label: 'VidKing', proxyParam: 'vk', timeout: 20000, jitter: 700, retries: 2, sourcesTimeout: 5000 },
 ];
 
