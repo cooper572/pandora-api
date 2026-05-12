@@ -387,6 +387,17 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
         }
     }
 
+    if (!bestRaw && mod.getDownloads) {
+        try {
+            const downloads = await mod.getDownloads(id, s || null, e || null);
+            if (downloads.length) {
+                bestRaw = { url: downloads[0].url, skipProxy: false, direct: true };
+            }
+        } catch (err) {
+            if (!fetchError) fetchError = err.message;
+        }
+    }
+
     const elapsed = Date.now() - start;
     const wrappedUrl = bestRaw ? wrapUrl(bestRaw, sourceKey, absoluteBase) : null;
     const rawUrl = bestRaw?.url ?? null;
