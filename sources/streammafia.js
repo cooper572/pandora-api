@@ -1,6 +1,4 @@
 import { createHash, createDecipheriv } from 'crypto';
-import { fetchWithProxyFallback } from '../proxies.js';
-
 const BASE_URL = 'https://sf.streammafia.to';
 
 const UA_LIST = [

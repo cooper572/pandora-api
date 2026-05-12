@@ -1,5 +1,3 @@
-import { fetchWithProxyFallback } from '../proxies.js';
-
 const BASE_URL = 'https://vixsrc.to';
 
 const HEADERS = {

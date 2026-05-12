@@ -1,7 +1,5 @@
 'use strict';
 
-import { fetchWithProxyFallback } from '../proxies.js';
-
 const BASE_URL = 'https://vsembed.ru';
 
 const HEADERS = {

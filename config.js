@@ -18,4 +18,3 @@ export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
 export const ALLOWED_ORIGINS = ['*'];
 export const HEALTH_PROBE_ID = '155';
 export const CACHE_TTL = 5 * 60 * 1000;
-export const PROXY_LIST_URL = process.env.PROXY_LIST_URL || 'https://api.proxyscrape.com/v3/free-proxy-list/get?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all&simplified=true';

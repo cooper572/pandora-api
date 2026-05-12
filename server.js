@@ -8,8 +8,6 @@ import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES }
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
 
-import { getProxies, fetchViaProxy, getProxyPoolInfo } from './proxies.js';
-
 const ALL_SOURCE_MODULES = Object.fromEntries(
     await Promise.all(
         SOURCES.map(async cfg => {
@@ -86,49 +84,7 @@ async function fetchUpstream(url, redirects = 0, extraHeaders = {}, _proxyAttemp
             redirect: 'manual',
         });
     } catch (fetchErr) {
-        if (!_proxyAttempt) {
-            const proxies = await getProxies();
-            const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
-            for (const proxy of shuffled) {
-                try {
-                    const pRes = await Promise.race([
-                        fetchViaProxy(httpsUrl, proxy, extraHeaders),
-                        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
-                    ]);
-                    if (!pRes) continue;
-                    if (pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
-                        pRes.body?.cancel();
-                        const location = pRes.headers.get('location');
-                        const next = new URL(location, httpsUrl).href.replace('http://', 'https://');
-                        return fetchUpstream(next, redirects + 1, extraHeaders, true);
-                    }
-                    if (pRes.status !== 403 && pRes.status !== 429) return pRes;
-                } catch { }
-            }
-        }
         throw fetchErr;
-    }
-
-    if ((res.status === 403 || res.status === 429) && !_proxyAttempt) {
-        res.body?.cancel();
-        const proxies = await getProxies();
-        const shuffled = proxies.sort(() => Math.random() - 0.5).slice(0, 5);
-        for (const proxy of shuffled) {
-            try {
-                const pRes = await Promise.race([
-                    fetchViaProxy(httpsUrl, proxy, extraHeaders),
-                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
-                ]);
-                if (!pRes) continue;
-                if (pRes.status >= 300 && pRes.status < 400 && pRes.headers.get('location')) {
-                    pRes.body?.cancel();
-                    const location = pRes.headers.get('location');
-                    const next = new URL(location, httpsUrl).href.replace('http://', 'https://');
-                    return fetchUpstream(next, redirects + 1, extraHeaders, true);
-                }
-                if (pRes.status !== 403 && pRes.status !== 429) return pRes;
-            } catch { }
-        }
     }
 
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
@@ -662,55 +618,6 @@ async function handleRequest(req) {
     if (downloadsTvMatch) {
         const [, id, season, episode] = downloadsTvMatch;
         return handleDownloadTv(id, season, episode, corsHeaders);
-    }
-
-    if (pathname === '/api/debug/proxies') {
-        const result = {
-            source: process.env.WEBSHARE_DOWNLOAD_URL ? 'webshare_download_url' : 'static_fallback',
-            username: process.env.WEBSHARE_USERNAME || null,
-            password_set: !!process.env.WEBSHARE_PASSWORD,
-            fetched: 0,
-            fetch_error: null,
-            sample: [],
-            tests: [],
-        };
-        try {
-            const proxies = await getProxies();
-            result.fetched = proxies.length;
-            result.fetch_error = getProxyPoolInfo().lastError;
-            result.sample = proxies.slice(0, 5).map(p =>
-                `${p.protocol}://${p.username ? p.username + ':***@' : ''}${p.ip}:${p.port}`
-            );
-
-            const targets = [
-                'https://vidrock.net/',
-                'https://vixsrc.to/',
-                'https://sf.streammafia.to/',
-                'https://api.videasy.net/',
-            ];
-
-            const testProxies = [...proxies].sort(() => Math.random() - 0.5).slice(0, 3);
-            result.tests = await Promise.all(testProxies.map(async proxy => {
-                const proxyLabel = `${proxy.protocol}://${proxy.username ? proxy.username + ':***@' : ''}${proxy.ip}:${proxy.port}`;
-                const targetResults = await Promise.all(targets.map(async url => {
-                    try {
-                        const r = await Promise.race([
-                            fetchViaProxy(url, proxy, { headers: { 'User-Agent': getUA() } }),
-                            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 6000))
-                        ]);
-                        if (!r) return { url, ok: false, error: 'null response' };
-                        r.body?.cancel?.();
-                        return { url, ok: r.ok || r.status === 301 || r.status === 302 || r.status === 200, status: r.status };
-                    } catch (err) {
-                        return { url, ok: false, error: err.message };
-                    }
-                }));
-                return { proxy: proxyLabel, targets: targetResults };
-            }));
-        } catch (err) {
-            result.error = err.message;
-        }
-        return { status: 200, body: JSON.stringify(result, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
     if (pathname === '/api/sources') {

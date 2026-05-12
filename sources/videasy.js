@@ -1,7 +1,5 @@
 'use strict';
 
-import { fetchWithProxyFallback } from '../proxies.js';
-
 const DEC_API = 'https://enc-dec.app/api/dec-videasy';
 
 const HEADERS = {
