@@ -14,7 +14,7 @@ async function umamiTrack(event, data = {}) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'User-Agent': 'stream-api/1.0',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             },
             body: JSON.stringify({
                 payload: {
@@ -24,7 +24,8 @@ async function umamiTrack(event, data = {}) {
                     language: 'en-US',
                     title: event,
                     url: `/${event}`,
-                    hostname: 'stream-api',
+                    hostname: 'missourimonster-vyla.hf.space',
+                    screen: '1920x1080',
                 },
                 type: 'event',
             }),
@@ -352,9 +353,9 @@ function getIndexBody() {
 
     const samples = {
         movie: {
-            stream: '/api/movie?id=550',
-            downloads: '/api/downloads/movie/550',
-            subtitles: '/api/subtitles/movie/550',
+            stream: '/api/movie?id=155',
+            downloads: '/api/downloads/movie/155',
+            subtitles: '/api/subtitles/movie/155',
         },
         tv: {
             stream: '/api/tv?id=1396&season=1&episode=1',
@@ -367,7 +368,7 @@ function getIndexBody() {
         enabledSources.map(({ key }) => [
             key,
             {
-                movie: `/api/test/550?source=${key}`,
+                movie: `/api/test/155?source=${key}`,
                 tv: `/api/test/1396?season=1&episode=1&source=${key}`,
             }
         ])
@@ -423,6 +424,8 @@ async function handleRequest(req) {
 
     if (pathname === '/api/health') {
         const result = await handleHealth(SOURCE_MODULES, cache, verifyStream);
+        const parsed = JSON.parse(result.body);
+        umamiTrack('health', { status: parsed.status, cache: parsed.cache });
         return { status: result.status, body: result.body, headers: { 'Content-Type': 'application/json', ...corsHeaders } };
     }
 
@@ -440,7 +443,8 @@ async function handleRequest(req) {
                     { base: SUBTITLE_BASES[2], path: `/movie/tt${id}` }
                 ])
             ]);
-            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } }; umamiTrack('movie', { id, sources: sources.length });
+            umamiTrack('movie', { id, sources: sources.length, found: sources.length > 0 });
+            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
@@ -461,7 +465,8 @@ async function handleRequest(req) {
                     { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${s}/${e}` }
                 ])
             ]);
-            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } }; umamiTrack('tv', { id, s, e, sources: sources.length });
+            umamiTrack('tv', { id, season: s, episode: e, sources: sources.length, found: sources.length > 0 });
+            if (!sources.length) return { status: 200, body: JSON.stringify({ sources: [], subtitles: subtitles || [], meta, noSources: true }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
             return { status: 200, body: JSON.stringify({ sources, subtitles: subtitles || [], meta }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         } catch (e) {
             return { status: 500, body: JSON.stringify({ error: e.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
