@@ -320,7 +320,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             candidates = rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u });
         } else {
             const raw = typeof rawResult === 'object' ? rawResult.url : rawResult;
-            if (raw) candidates = [{ url: raw, headers: rawResult?.headers }];
+            if (raw) candidates = [{ url: raw, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy }];
         }
     }
 
