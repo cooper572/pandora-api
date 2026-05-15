@@ -793,7 +793,10 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(result.status, headers);
         if (result.stream) {
             const { Readable } = await import('stream');
-            Readable.fromWeb(result.stream).pipe(res);
+            const readable = Readable.fromWeb(result.stream);
+            readable.on('error', () => { try { res.destroy(); } catch { } });
+            res.on('error', () => { try { readable.destroy(); } catch { } });
+            readable.pipe(res);
         } else {
             res.end(result.body ?? '');
         }
