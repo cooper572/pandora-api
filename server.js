@@ -633,7 +633,6 @@ async function handleRequest(req) {
                     } catch { }
                     delete extraHeaders['Host'];
                     delete extraHeaders['host'];
-                    umamiTrack('proxy', { source: matchedSource.key, url: cleanUrl.slice(0, 100) });
                     if (/workers\.dev/i.test(cleanUrl)) {
                         delete extraHeaders['Referer'];
                         delete extraHeaders['Origin'];
