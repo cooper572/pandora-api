@@ -4,8 +4,7 @@ import { webcrypto } from 'crypto';
 const crypto = webcrypto;
 
 const PASSPHRASE = 'x7k9mPqT2rWvY8zA5bC3nF6hJ2lK4mN9';
-const BASE_URL = 'https://vidrock.net/';
-const SUB_BASE_URL = 'https://sub.vdrk.site';
+const BASE_URL = 'https://vidrock.ru/';
 const PROXY_PREFIX = 'https://proxy.vidrock.store/';
 
 const HEADERS = {
