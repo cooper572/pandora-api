@@ -100,18 +100,19 @@ function withTimeout(promise, ms) {
     ]);
 }
 
-async function fetchUpstream(url, redirects = 0, extraHeaders = {}) {
+async function fetchUpstream(url, redirects = 0, extraHeaders = {}, timeoutMs = 30000) {
     if (redirects > 5) throw new Error('redirect loop');
     const httpsUrl = url.replace('http://', 'https://');
     const res = await fetch(httpsUrl, {
         headers: { 'User-Agent': getUA(), ...extraHeaders },
         redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         res.body?.cancel();
         const location = res.headers.get('location');
         const next = new URL(location, httpsUrl).href.replace('http://', 'https://');
-        return fetchUpstream(next, redirects + 1, extraHeaders);
+        return fetchUpstream(next, redirects + 1, extraHeaders, timeoutMs);
     }
     return res;
 }
@@ -129,12 +130,18 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
             return t.replace(/URI="([^"]+)"/g, (match, uri) => {
                 const abs = uri.startsWith('http') ? uri : uri.startsWith('/') ? originBase + uri : dir + uri;
                 const httpsAbs = abs.replace('http://', 'https://');
-                return `URI="${safeBase}/api?url=${encodeURIComponent(httpsAbs)}${extraParam}"`;
+                let decoded;
+                try { decoded = decodeURIComponent(httpsAbs); } catch { decoded = httpsAbs; }
+                const normalized = decoded.startsWith('http') ? decoded : httpsAbs;
+                return `URI="${safeBase}/api?url=${encodeURIComponent(normalized)}${extraParam}"`;
             });
         }
         const abs = t.startsWith('http') ? t : t.startsWith('/') ? originBase + t : dir + t;
         const httpsAbs = abs.replace('http://', 'https://');
-        return safeBase + '/api?url=' + encodeURIComponent(httpsAbs) + extraParam;
+        let decoded;
+        try { decoded = decodeURIComponent(httpsAbs); } catch { decoded = httpsAbs; }
+        const normalized = decoded.startsWith('http') ? decoded : httpsAbs;
+        return safeBase + '/api?url=' + encodeURIComponent(normalized) + extraParam;
     }).join('\n');
 }
 
@@ -146,7 +153,6 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null) {
             jitter(cfg.jitter).then(async () => {
                 for (const base of mod.BASES) {
                     const key = `${cfg.key}-${base}-${cacheKey}`;
-
                     const result = await getCached(
                         key,
                         () => withRetry(
@@ -155,7 +161,6 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null) {
                             500
                         )
                     );
-
                     if (result) return result;
                 }
                 return null;
@@ -188,14 +193,25 @@ function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
     if (!cfg || cfg.skipProxy || skipProxy) return raw;
 
     const isLocalHost = absoluteBase.includes('localhost') || absoluteBase.includes('127.0.0.1');
-    const processedRaw = isLocalHost ? raw : raw.replace('http://', 'https://');
+    const normalized = isLocalHost ? raw : raw.replace('http://', 'https://');
     const safeBase = isLocalHost ? absoluteBase : absoluteBase.replace('http://', 'https://');
 
-    let wrapped = `${safeBase}/api?url=` + encodeURIComponent(processedRaw) + '&' + cfg.proxyParam + '=1';
+    let wrapped = `${safeBase}/api?url=` + encodeURIComponent(normalized) + '&' + cfg.proxyParam + '=1';
     if (extraHeaders) {
         wrapped += '&proxyHeaders=' + encodeURIComponent(JSON.stringify(extraHeaders));
     }
     return wrapped;
+}
+
+function applyCdnHeaders(cleanUrl, extraHeaders, sourceKey) {
+    const mod = SOURCE_MODULES[sourceKey];
+    if (!mod?.CDN_HEADERS) return;
+    for (const rule of mod.CDN_HEADERS) {
+        if (rule.pattern.test(cleanUrl)) {
+            Object.assign(extraHeaders, rule.headers);
+            return;
+        }
+    }
 }
 
 async function verifyStream(rawUrl, sourceKey) {
@@ -217,7 +233,7 @@ async function verifyStream(rawUrl, sourceKey) {
 async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
     try {
         const m3u8Res = await fetch(proxiedUrl, {
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(20000),
             headers: { 'User-Agent': getUA(), ...extraHeaders },
         });
         if (!m3u8Res.ok) return { ok: false, error: `m3u8 fetch failed: ${m3u8Res.status}` };
@@ -229,7 +245,7 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
             const variantLine = lines.find(l => !l.startsWith('#') && l.startsWith('http'));
             if (!variantLine) return { ok: false, error: 'no variant playlist found in master' };
             const variantRes = await fetch(variantLine, {
-                signal: AbortSignal.timeout(8000),
+                signal: AbortSignal.timeout(20000),
                 headers: { 'User-Agent': getUA(), ...extraHeaders },
             });
             if (!variantRes.ok) return { ok: false, error: `variant playlist fetch failed: ${variantRes.status}` };
@@ -391,9 +407,9 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     const wrappedUrl = bestRaw ? wrapUrl(bestRaw, sourceKey, absoluteBase) : null;
     const rawUrl = bestRaw?.url ?? null;
 
-    if (wrappedUrl) {
+    if (wrappedUrl && !mod.SKIP_VERIFY) {
         const rawHeaders = bestRaw?.headers || {};
-        const proxiedBody = await fetch(wrappedUrl, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': getUA() } })
+        const proxiedBody = await fetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } })
             .then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message);
         const [proxiedCheck, rawCheck] = await Promise.all([
             verifyHlsPlayable(wrappedUrl, absoluteBase),
@@ -584,7 +600,7 @@ async function handleRequest(req) {
                 let m3u8Preview = null;
                 let hlsCheck = null;
                 try {
-                    const r = await fetch(wrapped, { signal: AbortSignal.timeout(6000), headers: { 'User-Agent': getUA() } });
+                    const r = await fetch(wrapped, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } });
                     const txt = await r.text();
                     m3u8Preview = txt.slice(0, 400);
                     hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
@@ -652,19 +668,10 @@ async function handleRequest(req) {
                     } catch { }
                     delete extraHeaders['Host'];
                     delete extraHeaders['host'];
-                    if (/workers\.dev/i.test(cleanUrl)) {
-                        delete extraHeaders['Referer'];
-                        delete extraHeaders['Origin'];
-                        extraHeaders['Accept'] = '*/*';
-                        extraHeaders['Accept-Language'] = 'en-US,en;q=0.9';
-                        extraHeaders['Accept-Encoding'] = 'gzip, deflate, br';
-                        extraHeaders['sec-fetch-dest'] = 'empty';
-                        extraHeaders['sec-fetch-mode'] = 'cors';
-                        extraHeaders['sec-fetch-site'] = 'cross-site';
-                    }
-                    const upstream = await fetchUpstream(cleanUrl, 0, extraHeaders);
+                    applyCdnHeaders(cleanUrl, extraHeaders, matchedSource.key);
+                    const upstream = await fetchUpstream(cleanUrl, 0, extraHeaders, 30000);
                     const ct = (upstream.headers.get('content-type') || '').toLowerCase();
-                    const looksLikeM3u8 = /\.m3u8?(\?|$)/i.test(cleanUrl) || cleanUrl.includes('/playlist/') || ct.includes('mpegurl') || ct.includes('m3u8');
+                    const looksLikeM3u8 = /\.m3u8?(\?|$)/i.test(cleanUrl) || cleanUrl.includes('/playlist/') || cleanUrl.includes('/streamsvr/') || ct.includes('mpegurl') || ct.includes('m3u8');
                     if (looksLikeM3u8) {
                         const text = await upstream.text();
                         if (text.trim().startsWith('#EXTM3U')) {
@@ -675,17 +682,20 @@ async function handleRequest(req) {
                         }
                         return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
-                    if (!upstream.ok) {
-                        return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
-                    }
                     const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(cleanUrl);
                     const isMkv = cleanUrl.includes('.mkv') || ct.includes('matroska') || ct.includes('x-matroska');
-                    const isPngMasked = ct === 'image/png' || ct === 'image/jpeg';
+                    const isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl);
                     if (isTikTok || isPngMasked) {
+                        if (!upstream.ok) {
+                            return { status: 502, body: `upstream ${upstream.status} for ${cleanUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
+                        }
                         const buf = await upstream.arrayBuffer();
                         const full = new Uint8Array(buf);
                         const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
                         return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
+                    }
+                    if (!upstream.ok) {
+                        return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
                     const finalCt = isMkv ? 'video/mp4' : (ct === 'application/octet-stream' ? 'video/mp4' : (ct || 'video/mp4'));
                     const rangeHeader = req.headers['range'];
@@ -706,13 +716,16 @@ async function handleRequest(req) {
                 }
                 const upstream = await fetchUpstream(rawUrl);
                 const ct = (upstream.headers.get('content-type') || '').toLowerCase();
-                const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(rawUrl);
+                const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(rawUrl) || rawUrl.includes('/streamsvr/');
                 if (isM3u8) {
                     const text = await upstream.text();
+                    if (!text.trim().startsWith('#EXTM3U')) {
+                        return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
+                    }
                     const absoluteBase = getAbsoluteBase(reqUrl.host);
                     const extraParam = matchedSource
-                        ? `&${SOURCE_MAP[matchedSource.key].proxyParam}=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders || '{}')}`
-                        : (q.proxyHeaders ? `&pp=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders)}` : '');
+                        ? `&${SOURCE_MAP[matchedSource.key].proxyParam}=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders || '{}')}&tt=1`
+                        : (q.proxyHeaders ? `&vn=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders)}&tt=1` : '&vn=1&tt=1');
                     return { status: 200, body: rewriteM3u8(text, rawUrl, extraParam, absoluteBase), headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                 }
                 const buf = await upstream.arrayBuffer();
@@ -795,6 +808,44 @@ async function handleRequest(req) {
             };
         } catch (err) {
             return { status: 200, body: JSON.stringify({ error: err.message }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+        }
+    }
+
+    const segDebugMatch = pathname.match(/^\/api\/segdebug$/);
+    if (segDebugMatch) {
+        const targetUrl = q.url;
+        if (!targetUrl) return { status: 400, body: 'missing url', headers: corsHeaders };
+        let extraHeaders = {};
+        if (q.proxyHeaders) {
+            try { Object.assign(extraHeaders, JSON.parse(decodeURIComponent(q.proxyHeaders))); } catch { }
+        }
+        delete extraHeaders['Host'];
+        delete extraHeaders['host'];
+        try {
+            const res = await fetch(targetUrl, {
+                headers: { 'User-Agent': getUA(), ...extraHeaders },
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10000),
+            });
+            const buf = await res.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const first32 = Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+            const redirectLocation = res.headers.get('location');
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    upstream_status: res.status,
+                    upstream_ct: res.headers.get('content-type'),
+                    redirect_location: redirectLocation,
+                    body_length: bytes.length,
+                    first_32_bytes_hex: first32,
+                    first_byte: bytes[0],
+                    request_headers_sent: extraHeaders,
+                }, null, 2),
+                headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            };
+        } catch (err) {
+            return { status: 200, body: JSON.stringify({ error: err.message, request_headers_sent: extraHeaders }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         }
     }
 

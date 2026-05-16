@@ -15,6 +15,23 @@ export const VERIFY_HEADERS = {
     Origin: ORIGIN,
 };
 
+export const CDN_HEADERS = [
+    {
+        pattern: /vodvidl\.site|vidldl\.site|vidldr\.site/i,
+        headers: {
+            'Referer': REFERER,
+            'Origin': ORIGIN,
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'cross-site',
+        },
+    },
+];
+
+export const SKIP_VERIFY = true;
+
 let bootPromise = null;
 
 function bootWasm() {

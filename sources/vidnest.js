@@ -9,6 +9,21 @@ const HEADERS = {
     'Origin': BASE_URL,
 };
 
+export const CDN_HEADERS = [
+    {
+        pattern: /letsgocdn\d+\.shop/i,
+        headers: {
+            'Referer': 'https://goodstream.cc/',
+            'Origin': 'https://goodstream.cc',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'cross-site',
+        },
+    },
+];
+
 const VIDNEST_ALPHABET = 'RB0fpH8ZEyVLkv7c2i6MAJ5u3IKFDxlS1NTsnGaqmXYdUrtzjwObCgQP94hoeW+/=';
 
 const VIDNEST_REVERSE_MAP = (() => {
@@ -111,7 +126,12 @@ export async function getStream(id, s, e) {
         SERVERS.map(({ path, query }) => fetchServer(path, query, id, s, e))
     );
     for (const result of results) {
-        if (result.status === 'fulfilled' && result.value) return result.value;
+        if (result.status === 'fulfilled' && result.value) {
+            const val = result.value;
+            if (typeof val === 'string') return { url: val, headers: HEADERS };
+            if (val && !val.headers) return { url: val.url, headers: HEADERS };
+            return val;
+        }
     }
     return null;
 }

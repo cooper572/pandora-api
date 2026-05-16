@@ -15,6 +15,35 @@ const HEADERS = {
     'Origin': BASE_URL,
 };
 
+export const CDN_HEADERS = [
+    {
+        pattern: /storrrrrrm\.site|vdrk\.site|lok-lok\.cc|67streams/i,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': BASE_URL,
+            'Origin': BASE_URL.replace(/\/$/, ''),
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'cross-site',
+        },
+    },
+    {
+        pattern: /lok-lok\.cc/i,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://lok-lok.cc/',
+            'Origin': 'https://lok-lok.cc',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin',
+        },
+    },
+];
+
 export const SKIP_VERIFY = true;
 export const MULTI_URL = true;
 
