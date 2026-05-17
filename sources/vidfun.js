@@ -15,58 +15,117 @@ let timeSynced = false;
 async function getWasm() {
     if (wasmExports) return wasmExports;
     if (wasmLoading) return wasmLoading;
+
     wasmLoading = (async () => {
         const wasmPath = join(__dirname, '../extensions/vidfun.wasm');
-        const wasmBuffer = await readFile(wasmPath);
-        const memory = { current: null };
-        const imports = {
-            js_code: {
-                'kotlin.captureStackTrace': () => Error().stack,
-                'kotlin.wasm.internal.throwJsError': (msg, name, stack) => {
-                    const e = new Error();
-                    e.message = msg; e.name = name; e.stack = stack;
-                    throw e;
+
+        console.log('[vidfun] WASM path:', wasmPath);
+
+        try {
+            const wasmBuffer = await readFile(wasmPath);
+
+            console.log('[vidfun] WASM loaded, size:', wasmBuffer.byteLength);
+
+            const memory = { current: null };
+
+            const imports = {
+                js_code: {
+                    'kotlin.captureStackTrace': () => Error().stack,
+
+                    'kotlin.wasm.internal.throwJsError': (msg, name, stack) => {
+                        const e = new Error();
+                        e.message = msg;
+                        e.name = name;
+                        e.stack = stack;
+                        throw e;
+                    },
+
+                    'kotlin.wasm.internal.stringLength': s => s.length,
+
+                    'kotlin.wasm.internal.jsExportStringToWasm': (str, start, len, ptr) => {
+                        const mem = memory.current?.memory;
+                        if (!mem) return;
+
+                        const view = new Uint16Array(mem.buffer, ptr, len);
+
+                        for (let i = 0; i < len; i++) {
+                            view[i] = str.charCodeAt(start + i);
+                        }
+                    },
+
+                    'kotlin.wasm.internal.externrefToString': s => String(s),
+
+                    'kotlin.wasm.internal.importStringFromWasm': (ptr, len, prefix) => {
+                        const mem = memory.current?.memory;
+                        if (!mem) return '';
+
+                        const view = new Uint16Array(mem.buffer, ptr, len);
+                        const s = String.fromCharCode(...view);
+
+                        return prefix == null ? s : prefix + s;
+                    },
+
+                    'kotlin.wasm.internal.getJsEmptyString': () => '',
+
+                    'kotlin.wasm.internal.isNullish': v => v == null,
+
+                    'kotlin.wasm.internal.getCachedJsObject_$external_fun': (() => {
+                        const cache = new WeakMap();
+
+                        return (obj, id) => {
+                            if (
+                                (typeof obj !== 'object' &&
+                                    typeof obj !== 'function') ||
+                                obj == null
+                            ) {
+                                return id;
+                            }
+
+                            const hit = cache.get(obj);
+
+                            if (hit === undefined) {
+                                cache.set(obj, id);
+                                return id;
+                            }
+
+                            return hit;
+                        };
+                    })(),
+
+                    'kotlin.js.stackPlaceHolder_js_code': () => '',
+
+                    'kotlin.js.message_$external_prop_getter': e => e.message,
+
+                    'kotlin.js.stack_$external_prop_getter': e => e.stack,
+
+                    'kotlin.js.JsError_$external_class_instanceof': e =>
+                        e instanceof Error,
+
+                    'kotlin.random.initialSeed': () =>
+                        (Math.random() * 2 ** 32) | 0,
                 },
-                'kotlin.wasm.internal.stringLength': s => s.length,
-                'kotlin.wasm.internal.jsExportStringToWasm': (str, start, len, ptr) => {
-                    const mem = memory.current?.memory;
-                    if (!mem) return;
-                    const view = new Uint16Array(mem.buffer, ptr, len);
-                    for (let i = 0; i < len; i++) view[i] = str.charCodeAt(start + i);
-                },
-                'kotlin.wasm.internal.externrefToString': s => String(s),
-                'kotlin.wasm.internal.importStringFromWasm': (ptr, len, prefix) => {
-                    const mem = memory.current?.memory;
-                    if (!mem) return '';
-                    const view = new Uint16Array(mem.buffer, ptr, len);
-                    const s = String.fromCharCode(...view);
-                    return prefix == null ? s : prefix + s;
-                },
-                'kotlin.wasm.internal.getJsEmptyString': () => '',
-                'kotlin.wasm.internal.isNullish': v => v == null,
-                'kotlin.wasm.internal.getCachedJsObject_$external_fun': (() => {
-                    const cache = new WeakMap();
-                    return (obj, id) => {
-                        if (typeof obj !== 'object' && typeof obj !== 'function' || obj == null) return id;
-                        const hit = cache.get(obj);
-                        if (hit === undefined) { cache.set(obj, id); return id; }
-                        return hit;
-                    };
-                })(),
-                'kotlin.js.stackPlaceHolder_js_code': () => '',
-                'kotlin.js.message_$external_prop_getter': e => e.message,
-                'kotlin.js.stack_$external_prop_getter': e => e.stack,
-                'kotlin.js.JsError_$external_class_instanceof': e => e instanceof Error,
-                'kotlin.random.initialSeed': () => Math.random() * 2 ** 32 | 0,
-            },
-            intrinsics: {},
-        };
-        const { instance } = await WebAssembly.instantiate(wasmBuffer, imports);
-        memory.current = instance.exports;
-        instance.exports._initialize?.();
-        wasmExports = instance.exports;
-        return wasmExports;
+
+                intrinsics: {},
+            };
+
+            const { instance } = await WebAssembly.instantiate(
+                wasmBuffer,
+                imports
+            );
+
+            memory.current = instance.exports;
+
+            instance.exports._initialize?.();
+
+            wasmExports = instance.exports;
+
+            return wasmExports;
+        } catch (err) {
+            wasmLoading = null;
+            throw err;
+        }
     })();
+
     return wasmLoading;
 }
 
