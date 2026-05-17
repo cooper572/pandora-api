@@ -16,6 +16,7 @@ export const SOURCES = [
     { key: 'vidnest', sourceFile: 'vidnest', label: 'VidNest', proxyParam: 'vn', timeout: 20000, jitter: 600, retries: 3 },
     { key: 'popr', sourceFile: 'popr', label: 'Popr', proxyParam: 'pp', timeout: 20000, jitter: 600, retries: 2, disabled: true },
     { key: 'cinezo', sourceFile: 'cinezo', label: 'Cinezo', proxyParam: 'cz', timeout: 25000, jitter: 500, retries: 2 },
+    { key: 'vidfun', sourceFile: 'vidfun', label: 'VidFun', proxyParam: 'vf', timeout: 30000, jitter: 500, retries: 2 },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
