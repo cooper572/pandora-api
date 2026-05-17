@@ -19,12 +19,8 @@ async function getWasm() {
     wasmLoading = (async () => {
         const wasmPath = join(__dirname, '../extensions/vidfun.wasm');
 
-        console.log('[vidfun] WASM path:', wasmPath);
-
         try {
             const wasmBuffer = await readFile(wasmPath);
-
-            console.log('[vidfun] WASM loaded, size:', wasmBuffer.byteLength);
 
             const memory = { current: null };
 
@@ -41,13 +37,10 @@ async function getWasm() {
                     },
 
                     'kotlin.wasm.internal.stringLength': s => s.length,
-
                     'kotlin.wasm.internal.jsExportStringToWasm': (str, start, len, ptr) => {
                         const mem = memory.current?.memory;
                         if (!mem) return;
-
                         const view = new Uint16Array(mem.buffer, ptr, len);
-
                         for (let i = 0; i < len; i++) {
                             view[i] = str.charCodeAt(start + i);
                         }
@@ -58,10 +51,8 @@ async function getWasm() {
                     'kotlin.wasm.internal.importStringFromWasm': (ptr, len, prefix) => {
                         const mem = memory.current?.memory;
                         if (!mem) return '';
-
                         const view = new Uint16Array(mem.buffer, ptr, len);
                         const s = String.fromCharCode(...view);
-
                         return prefix == null ? s : prefix + s;
                     },
 
@@ -246,18 +237,15 @@ export async function getStream(id, s, e) {
     try {
         await syncTime();
     } catch (err) {
-        console.error('[vidfun] syncTime failed:', err.message);
         return null;
     }
     let servers;
     try {
         servers = await getServers();
     } catch (err) {
-        console.error('[vidfun] getServers failed:', err.message);
         return null;
     }
     if (!servers.length) {
-        console.error('[vidfun] no servers available');
         return null;
     }
     const type = s ? 'series' : 'movie';
@@ -268,10 +256,7 @@ export async function getStream(id, s, e) {
             const data = await fetchStream(server.name, type, params);
             const result = extractUrl(data);
             if (result) return result;
-            console.error('[vidfun] no url from server:', server.name, 'data:', JSON.stringify(data)?.slice(0, 200));
-        } catch (err) {
-            console.error('[vidfun] server', server.name, 'failed:', err.message);
-        }
+        } catch (err) { }
     }
     return null;
 }
