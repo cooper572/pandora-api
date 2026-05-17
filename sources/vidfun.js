@@ -243,9 +243,23 @@ function extractUrl(data) {
 }
 
 export async function getStream(id, s, e) {
-    await syncTime();
-    const servers = await getServers();
-    if (!servers.length) return null;
+    try {
+        await syncTime();
+    } catch (err) {
+        console.error('[vidfun] syncTime failed:', err.message);
+        return null;
+    }
+    let servers;
+    try {
+        servers = await getServers();
+    } catch (err) {
+        console.error('[vidfun] getServers failed:', err.message);
+        return null;
+    }
+    if (!servers.length) {
+        console.error('[vidfun] no servers available');
+        return null;
+    }
     const type = s ? 'series' : 'movie';
     for (const server of servers) {
         try {
@@ -254,7 +268,10 @@ export async function getStream(id, s, e) {
             const data = await fetchStream(server.name, type, params);
             const result = extractUrl(data);
             if (result) return result;
-        } catch { }
+            console.error('[vidfun] no url from server:', server.name, 'data:', JSON.stringify(data)?.slice(0, 200));
+        } catch (err) {
+            console.error('[vidfun] server', server.name, 'failed:', err.message);
+        }
     }
     return null;
 }
