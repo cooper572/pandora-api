@@ -5,8 +5,8 @@
     "description": "Vyla API — multi-provider stream scraper on Hugging Face Spaces",
     "type": "module",
     "scripts": {
-        "start": "node server.js",
-        "dev": "node server.js"
+        "start": "node --experimental-wasm-gc server.js",
+        "dev": "node --experimental-wasm-gc server.js"
     },
     "dependencies": {
         "dotenv": "^17.4.2",
