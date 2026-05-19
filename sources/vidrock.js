@@ -17,29 +17,13 @@ const HEADERS = {
 
 export const CDN_HEADERS = [
     {
-        pattern: /storrrrrrm\.site|vdrk\.site|lok-lok\.cc|67streams/i,
+        pattern: /.*/,
         headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
             'Accept': '*/*',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': BASE_URL,
             'Origin': BASE_URL.replace(/\/$/, ''),
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'cross-site',
-        },
-    },
-    {
-        pattern: /lok-lok\.cc/i,
-        headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://lok-lok.cc/',
-            'Origin': 'https://lok-lok.cc',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-origin',
         },
     },
 ];
@@ -70,24 +54,12 @@ async function fetchPage(url) {
 }
 
 function getStreamProxyHeaders(streamUrl) {
-    if (streamUrl.includes('hls2.vdrk.site') || streamUrl.includes('lok-lok.cc')) {
-        return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://lok-lok.cc/',
-            'Origin': 'https://lok-lok.cc',
-        };
-    }
-    if (streamUrl.includes('67streams')) {
-        return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': BASE_URL,
-            'Origin': BASE_URL.replace(/\/$/, ''),
-        };
-    }
+    try {
+        const { hostname } = new URL(streamUrl);
+        if (hostname === 'play.xpass.top' || hostname.endsWith('.xpass.top')) {
+            return { 'Referer': 'https://play.xpass.top/', 'Origin': 'https://play.xpass.top' };
+        }
+    } catch { }
     return {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.6884.98 Safari/537.36',
         'Accept': '*/*',
@@ -106,31 +78,40 @@ export async function getStream(id, s, e) {
         const data = await fetchPage(pageUrl);
         if (!data || typeof data !== 'object') return null;
 
-        const allUrls = [];
+        const hlsUrls = [];
+        const mp4Urls = [];
 
-        for (const stream of Object.values(data)) {
-            if (!stream?.url) continue;
+        await Promise.all(Object.values(data).map(async (stream) => {
+            if (!stream?.url) return;
 
-            if (stream.url.includes('hls2.vdrk.site')) {
-                const cdnData = await fetchPage(stream.url);
-                if (!Array.isArray(cdnData)) continue;
-                for (const obj of cdnData) {
-                    if (!obj?.url) continue;
-                    let finalUrl;
-                    if (obj.url.startsWith(PROXY_PREFIX)) {
-                        const encodedPath = obj.url.slice(PROXY_PREFIX.length);
-                        finalUrl = decodeURIComponent(encodedPath.replace(/^\//, ''));
-                    } else {
-                        finalUrl = obj.url;
-                    }
-                    allUrls.push({ url: finalUrl, headers: getStreamProxyHeaders(finalUrl) });
-                }
-                continue;
+            let streamUrl = stream.url;
+
+            if (streamUrl.startsWith(PROXY_PREFIX)) {
+                streamUrl = decodeURIComponent(streamUrl.slice(PROXY_PREFIX.length).replace(/^\//, ''));
             }
 
-            allUrls.push({ url: stream.url, headers: getStreamProxyHeaders(stream.url) });
-        }
+            const fetchedData = await fetchPage(streamUrl).catch(() => null);
 
+            if (Array.isArray(fetchedData)) {
+                for (const obj of fetchedData) {
+                    if (!obj?.url) continue;
+                    let finalUrl = obj.url.startsWith(PROXY_PREFIX)
+                        ? decodeURIComponent(obj.url.slice(PROXY_PREFIX.length).replace(/^\//, ''))
+                        : obj.url;
+                    mp4Urls.push({ url: finalUrl, headers: getStreamProxyHeaders(finalUrl), resolution: obj.resolution });
+                }
+                return;
+            }
+
+            if (stream.type === 'hls' || (typeof fetchedData === 'string' && fetchedData.includes('#EXTM3U'))) {
+                hlsUrls.push({ url: streamUrl, headers: getStreamProxyHeaders(streamUrl) });
+                return;
+            }
+
+            mp4Urls.push({ url: streamUrl, headers: getStreamProxyHeaders(streamUrl) });
+        }));
+
+        const allUrls = [...hlsUrls, ...mp4Urls];
         if (!allUrls.length) return null;
         return { allUrls };
     } catch {
