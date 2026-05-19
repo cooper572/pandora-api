@@ -1,3 +1,5 @@
+// vidnest itself is compromised, their player is entirely compromised returning sources that redirect to aware domains
+
 const BASE_URL = 'https://vidnest.fun';
 const API_BASE_URL = 'https://new.vidnest.fun';
 

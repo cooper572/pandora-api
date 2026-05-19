@@ -10,20 +10,41 @@ const HEADERS = {
 };
 
 const SERVERS = [
-    { name: 'mb-flix', url: 'https://api.videasy.net/mb-flix/sources-with-title' },
-    { name: 'cdn', url: 'https://api.videasy.net/cdn/sources-with-title' },
-    { name: 'superflix', url: 'https://api.videasy.net/superflix/sources-with-title' },
-    { name: 'lamovie', url: 'https://api.videasy.net/lamovie/sources-with-title' },
+    { name: 'cuevana', url: 'https://api2.videasy.net/cuevana/sources-with-title', language: 'english' },
+    { name: 'mb-flix', url: 'https://api.videasy.net/mb-flix/sources-with-title', language: 'english' },
+    { name: '1movies', url: 'https://api.videasy.net/1movies/sources-with-title', language: 'english' },
+    { name: 'cdn', url: 'https://api.videasy.net/cdn/sources-with-title', language: 'english' },
+    { name: 'superflix', url: 'https://api.videasy.net/superflix/sources-with-title', language: 'english' },
+    { name: 'lamovie', url: 'https://api.videasy.net/lamovie/sources-with-title', language: 'english' },
+];
+
+const BLOCKED_DOMAINS = [
+    'easy.speedsterwave.app'
 ];
 
 const decCache = new Map();
+
+function blobKey(tmdbId, blob) {
+    return `${tmdbId}:${blob.slice(0, 32)}`;
+}
+
+function isBlockedUrl(url) {
+    try {
+        const urlObj = new URL(url);
+        return BLOCKED_DOMAINS.some(domain => urlObj.hostname.includes(domain));
+    } catch {
+        return false;
+    }
+}
 
 async function decrypt(blob, tmdbId) {
     if (!blob || blob.length < 10) {
         return null;
     }
-    const key = `${tmdbId}:${blob.slice(0, 32)}`;
-    if (decCache.has(key)) return decCache.get(key);
+    const key = blobKey(tmdbId, blob);
+    if (decCache.has(key)) {
+        return decCache.get(key);
+    }
     try {
         const res = await fetch(DEC_API, {
             method: 'POST',
@@ -47,7 +68,7 @@ async function fetchServer(server, id, s, e, title) {
     try {
         const params = new URLSearchParams({
             title: title ?? '',
-            mediaType: s ? 'tv' : 'movie',
+            mediaType: s != null ? 'tv' : 'movie',
             tmdbId: String(id),
             imdbId: '',
             episodeId: String(e ?? 1),
@@ -55,30 +76,39 @@ async function fetchServer(server, id, s, e, title) {
         });
         const url = `${server.url}?${params}`;
         const res = await fetch(url, { headers: HEADERS });
-        if (!res?.ok) return null;
+        if (!res?.ok) {
+            return null;
+        }
         const blob = await res.text();
-        if (!blob || blob.length < 10) return null;
+        if (!blob || blob.length < 10) {
+            return null;
+        }
         const decrypted = await decrypt(blob, String(id));
         if (!decrypted || !decrypted.sources.length) {
             return null;
         }
-        const urls = decrypted.sources.filter(s => s?.url).map(s => s.url);
+        const urls = decrypted.sources
+            .filter(s => s?.url && !isBlockedUrl(s.url))
+            .map(s => s.url);
         return urls;
     } catch (err) {
         return null;
     }
 }
 
-async function getStream(id, s, e) {
-    const results = await Promise.all(SERVERS.map(srv => fetchServer(srv, id, s, e, '')));
-    for (const urls of results) {
-        if (urls && urls.length) return { url: urls[0], headers: HEADERS };
+async function getStream(id, s, e, title) {
+    const results = await Promise.all(SERVERS.map(srv => fetchServer(srv, id, s, e, title ?? '')));
+    for (let i = 0; i < results.length; i++) {
+        const urls = results[i];
+        if (urls && urls.length) {
+            return { url: urls[0], headers: HEADERS };
+        }
     }
     return null;
 }
 
-async function getSources(id, s, e) {
-    const results = await Promise.all(SERVERS.map(srv => fetchServer(srv, id, s, e, '')));
+async function getSources(id, s, e, title) {
+    const results = await Promise.all(SERVERS.map(srv => fetchServer(srv, id, s, e, title ?? '')));
     const urls = [];
     for (const r of results) {
         if (r) urls.push(...r);
@@ -87,21 +117,39 @@ async function getSources(id, s, e) {
 }
 
 async function proxyStream(url, res, { fetchUpstream, rewriteM3u8 }) {
-    const upstream = await fetchUpstream(url, 0, HEADERS);
-    const ct = (upstream.headers['content-type'] || '').toLowerCase();
-    const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(url);
-    if (isM3u8) {
-        const chunks = [];
-        for await (const c of upstream) chunks.push(c);
-        const body = Buffer.concat(chunks).toString('utf8');
-        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    try {
+        const upstream = await fetchUpstream(url, 0, HEADERS);
+
+        if (!upstream) {
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
+            return res.end('No upstream');
+        }
+
+        const ct = (upstream.headers?.['content-type'] || '').toLowerCase();
+        const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(url);
+
+        if (isM3u8) {
+            const chunks = [];
+            for await (const c of upstream) {
+                chunks.push(c);
+            }
+            const body = Buffer.concat(chunks).toString('utf8');
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+            return res.end(rewriteM3u8(body, url, '&vy=1'));
+        }
+
+        res.setHeader('Content-Type', ct || 'application/octet-stream');
         res.setHeader('Access-Control-Allow-Origin', '*');
-        return res.end(rewriteM3u8(body, url, '&vy=1'));
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        upstream.pipe(res);
+    } catch (err) {
+        if (!res.headersSent) {
+            res.writeHead(502, { 'Content-Type': 'text/plain' });
+            res.end('Proxy failed');
+        }
     }
-    res.setHeader('Content-Type', ct || 'application/octet-stream');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    upstream.pipe(res);
 }
 
 const VERIFY_HEADERS = { ...HEADERS };
