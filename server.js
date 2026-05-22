@@ -8,6 +8,8 @@ import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES }
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
 
+const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
+
 async function umamiTrack(event, data = {}) {
     try {
         await fetch('https://cloud.umami.is/api/send', {
@@ -145,7 +147,11 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
     }).join('\n');
 }
 
-function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = '') {
+function isFallbackNeeded(host) {
+    return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
+}
+
+function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = '', fallbackBase = '') {
     const mod = SOURCE_MODULES[cfg.key];
 
     if (cfg.multiBase) {
@@ -170,18 +176,30 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
     }
 
     return withTimeout(
-        jitter(cfg.jitter).then(() =>
-            getCached(
+        jitter(cfg.jitter).then(async () => {
+            const primary = await getCached(
                 `${cfg.key}-${cacheKey}`,
                 () => withRetry(
                     () => mod.getStream(id, s, e, clientIP, absoluteBase),
                     cfg.retries,
                     1000
                 )
-            )
-        ),
+            );
+            if (primary) return primary;
+            if (fallbackBase) {
+                return getCached(
+                    `${cfg.key}-fallback-${cacheKey}`,
+                    () => withRetry(
+                        () => mod.getStream(id, s, e, clientIP, fallbackBase),
+                        cfg.retries,
+                        1000
+                    )
+                );
+            }
+            return null;
+        }),
         cfg.timeout
-    ).then(r => r);
+    );
 }
 
 function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
@@ -269,13 +287,15 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
 
 async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = '') {
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
+    const fallbackBase = isFallbackNeeded(absoluteBase.replace('https://', '').replace('http://', '')) ? FALLBACK_BASE : '';
     const fetched = await Promise.all(
         SOURCES.filter(cfg => !cfg.disabled).map(cfg =>
-            fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase)
+            fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase)
                 .then(r => ({ raw: r, source: cfg.key }))
                 .catch(() => ({ raw: null, source: cfg.key }))
         )
     );
+
     const candidates = fetched.filter(c => c.raw);
     const verified = await Promise.all(
         candidates.map(async c => {
@@ -375,7 +395,8 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     let rawResult = null;
     let fetchError = null;
     try {
-        rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase);
+        const fallbackBase = isFallbackNeeded(host) ? FALLBACK_BASE : '';
+        rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
     } catch (err) {
         fetchError = err.message;
     }
@@ -622,13 +643,14 @@ async function handleRequest(req) {
             };
 
             try {
-                streamResult = await mod.getStream(id, s, e, null, absoluteBase);
+                const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
+                streamResult = await mod.getStream(id, s, e, null, absoluteBase) ?? await mod.getStream(id, s, e, null, fallbackBase);
             } catch (err) {
                 streamError = err.message;
             } finally {
                 globalThis.fetch = originalFetch;
             }
-            
+
             const candidates = streamResult?.allUrls || (streamResult ? [streamResult] : []);
             const checks = await Promise.all(candidates.slice(0, 3).map(async (raw, i) => {
                 const wrapped = wrapUrl(raw, sourceKey, absoluteBase);
