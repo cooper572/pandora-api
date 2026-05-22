@@ -411,10 +411,10 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
         }
         if (!rawResult) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, clientIP, absoluteBase), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, absoluteBase), 30000);
         }
         if (!rawResult && isFallbackNeeded(host)) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, clientIP, fallbackBase), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, fallbackBase, fallbackBase), 30000);
         }
     } catch (err) {
         fetchError = err.message;
