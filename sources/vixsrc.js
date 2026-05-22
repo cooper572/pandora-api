@@ -9,19 +9,16 @@ const HEADERS = {
 };
 
 export const VERIFY_HEADERS = { ...HEADERS };
-export const SKIP_VERIFY = false;
+export const SKIP_VERIFY = true;
 export const MULTI_URL = false;
 
-let _selfBase = null;
-export function setSelfBase(base) { _selfBase = base; }
+const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
-async function proxyFetch(url, asJson = false) {
-    const target = _selfBase
-        ? `${_selfBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`
-        : url;
-    const fetchOpts = _selfBase ? {} : { headers: HEADERS };
+async function proxyFetch(url, asJson = false, selfBase = null) {
+    const base = selfBase || FALLBACK_BASE;
+    const target = `${base}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`;
     try {
-        const res = await fetch(target, fetchOpts);
+        const res = await fetch(target, {});
         if (!res || res.status !== 200) return null;
         if (asJson) {
             const text = await res.text();
@@ -54,14 +51,13 @@ function buildMasterUrl({ token, expires, playlist, lang }) {
 }
 
 export async function getStream(id, s, e, clientIP = null, selfBase = null) {
-    if (selfBase) _selfBase = selfBase;
     try {
         const apiUrl = buildApiUrl(id, s, e);
-        const apiData = await proxyFetch(apiUrl, true);
+        const apiData = await proxyFetch(apiUrl, true, selfBase);
         if (!apiData?.src) return null;
 
         const embedUrl = apiData.src.startsWith('http') ? apiData.src : BASE_URL + apiData.src;
-        const html = await proxyFetch(embedUrl, false);
+        const html = await proxyFetch(embedUrl, false, selfBase);
         if (!html) return null;
 
         const tokenData = extractTokenData(html);
@@ -69,35 +65,12 @@ export async function getStream(id, s, e, clientIP = null, selfBase = null) {
 
         const masterUrl = buildMasterUrl(tokenData);
 
-        const playlistText = await proxyFetch(masterUrl, false);
-        if (!playlistText) return null;
-
-        const cleaned = playlistText.trim();
-        if (!cleaned.startsWith('#EXTM3U')) return null;
-
-        const variantUrl = getBestVariantUrl(cleaned, masterUrl);
-        return variantUrl ?? masterUrl;
+        return {
+            url: masterUrl,
+            headers: HEADERS,
+            skipProxy: false,
+        };
     } catch {
         return null;
     }
-}
-
-function getBestVariantUrl(content, masterUrl) {
-    const lines = content.split('\n');
-    let bestRes = 0;
-    let bestUrl = null;
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line.startsWith('#EXT-X-STREAM-INF')) continue;
-        const resMatch = line.match(/RESOLUTION=\d+x(\d+)/);
-        const res = resMatch ? parseInt(resMatch[1], 10) : 0;
-        let urlLine = lines[i + 1]?.trim();
-        if (!urlLine || urlLine.startsWith('#')) continue;
-        if (urlLine.includes('localhost') || urlLine.includes('127.0.0.1')) continue;
-        if (res > bestRes) {
-            bestRes = res;
-            bestUrl = urlLine.startsWith('http') ? urlLine : new URL(urlLine, masterUrl).href;
-        }
-    }
-    return bestUrl;
 }
