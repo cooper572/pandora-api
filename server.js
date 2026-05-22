@@ -593,8 +593,41 @@ async function handleRequest(req) {
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         const t0 = Date.now();
         try {
-            const result = await mod.getStream(id, s, e);
-            const candidates = result?.allUrls || (result ? [result] : []);
+            let streamResult = null;
+            let streamError = null;
+            let fetchTrace = [];
+
+            const originalFetch = globalThis.fetch;
+            globalThis.fetch = async (url, opts) => {
+                const start = Date.now();
+                try {
+                    const res = await originalFetch(url, opts);
+                    fetchTrace.push({
+                        url: typeof url === 'string' ? url.slice(0, 200) : String(url).slice(0, 200),
+                        status: res.status,
+                        ok: res.ok,
+                        ms: Date.now() - start,
+                    });
+                    return res;
+                } catch (err) {
+                    fetchTrace.push({
+                        url: typeof url === 'string' ? url.slice(0, 200) : String(url).slice(0, 200),
+                        error: err.message,
+                        ms: Date.now() - start,
+                    });
+                    throw err;
+                }
+            };
+
+            try {
+                streamResult = await mod.getStream(id, s, e);
+            } catch (err) {
+                streamError = err.message;
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+
+            const candidates = streamResult?.allUrls || (streamResult ? [streamResult] : []);
             const checks = await Promise.all(candidates.slice(0, 3).map(async (raw, i) => {
                 const wrapped = wrapUrl(raw, sourceKey, absoluteBase);
                 let m3u8Preview = null;
@@ -609,7 +642,22 @@ async function handleRequest(req) {
                 }
                 return { index: i, raw_url: typeof raw === 'object' ? raw.url : raw, proxy_url: wrapped, hls_check: hlsCheck, m3u8_preview: m3u8Preview };
             }));
-            return { status: 200, body: JSON.stringify({ source: sourceKey, id, candidates: candidates.length, checks, elapsed_ms: Date.now() - t0 }, null, 2), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
+
+            return {
+                status: 200,
+                body: JSON.stringify({
+                    source: sourceKey,
+                    id,
+                    candidates: candidates.length,
+                    checks,
+                    elapsed_ms: Date.now() - t0,
+                    stream_error: streamError,
+                    fetch_trace: fetchTrace,
+                    got_result: streamResult !== null,
+                    result_keys: streamResult ? Object.keys(streamResult) : null,
+                }, null, 2),
+                headers: { 'Content-Type': 'application/json', ...corsHeaders }
+            };
         } catch (err) {
             return { status: 200, body: JSON.stringify({ error: err.message, elapsed_ms: Date.now() - t0 }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         }
