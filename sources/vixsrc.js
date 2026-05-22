@@ -15,22 +15,29 @@ export const MULTI_URL = false;
 let _selfBase = null;
 export function setSelfBase(base) { _selfBase = base; }
 
+const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
+
 async function proxyFetch(url, asJson = false) {
-    const target = _selfBase
-        ? `${_selfBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`
-        : url;
-    const fetchOpts = _selfBase ? {} : { headers: HEADERS };
-    try {
-        const res = await fetch(target, fetchOpts);
-        if (!res || res.status !== 200) return null;
-        if (asJson) {
+    const bases = _selfBase ? [_selfBase, FALLBACK_BASE] : [null];
+    for (const base of bases) {
+        const target = base
+            ? `${base}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`
+            : url;
+        const fetchOpts = base ? {} : { headers: HEADERS };
+        try {
+            const res = await fetch(target, fetchOpts);
+            if (!res || res.status !== 200) continue;
             const text = await res.text();
-            try { return JSON.parse(text); } catch { return null; }
+            if (text.includes('enable cookies') || text.includes('you have been blocked')) continue;
+            if (asJson) {
+                try { return JSON.parse(text); } catch { continue; }
+            }
+            return text;
+        } catch {
+            continue;
         }
-        return res.text();
-    } catch {
-        return null;
     }
+    return null;
 }
 
 function buildApiUrl(id, s, e) {
