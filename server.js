@@ -724,14 +724,9 @@ async function handleRequest(req) {
             try {
                 const rawUrl = q.url || q.proxy;
                 try { new URL(rawUrl); } catch (e) { throw new Error('invalid url'); }
-                if (q.tt) {
-                    const upstream = await fetchUpstream(rawUrl);
-                    const buf = await upstream.arrayBuffer();
-                    const full = new Uint8Array(buf);
-                    const stripped = full[0] === 0x89 ? full.slice(120) : full;
-                    return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
-                }
+
                 const matchedSource = SOURCES.find(cfg => q[cfg.proxyParam]);
+
                 if (matchedSource) {
                     const mod = SOURCE_MODULES[matchedSource.key];
                     const cfg = SOURCE_MAP[matchedSource.key];
@@ -786,6 +781,12 @@ async function handleRequest(req) {
                     if (!upstream.ok) {
                         return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
+                    if (q.tt) {
+                        const buf = await upstream.arrayBuffer();
+                        const full = new Uint8Array(buf);
+                        const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
+                        return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
+                    }
                     const finalCt = isMkv ? 'video/mp4' : (ct === 'application/octet-stream' ? 'video/mp4' : (ct || 'video/mp4'));
                     const rangeHeader = req.headers['range'];
                     const streamUpstream = rangeHeader ? await fetch(cleanUrl, {
@@ -803,19 +804,24 @@ async function handleRequest(req) {
                     if (streamUpstream.headers.get('content-range')) responseHeaders['Content-Range'] = streamUpstream.headers.get('content-range');
                     return { status: streamStatus, stream: streamUpstream.body, headers: responseHeaders };
                 }
+
                 const upstream = await fetchUpstream(rawUrl);
                 const ct = (upstream.headers.get('content-type') || '').toLowerCase();
-                const isM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(rawUrl) || rawUrl.includes('/streamsvr/');
-                if (isM3u8) {
+                const looksLikeM3u8 = ct.includes('mpegurl') || ct.includes('m3u8') || /\.m3u8?(\?|$)/i.test(rawUrl) || rawUrl.includes('/streamsvr/') || rawUrl.includes('/playlist/');
+                if (looksLikeM3u8) {
                     const text = await upstream.text();
                     if (!text.trim().startsWith('#EXTM3U')) {
                         return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
                     const absoluteBase = getAbsoluteBase(reqUrl.host);
-                    const extraParam = matchedSource
-                        ? `&${SOURCE_MAP[matchedSource.key].proxyParam}=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders || '{}')}&tt=1`
-                        : (q.proxyHeaders ? `&vn=1&proxyHeaders=${encodeURIComponent(q.proxyHeaders)}&tt=1` : '&vn=1&tt=1');
-                    return { status: 200, body: rewriteM3u8(text, rawUrl, extraParam, absoluteBase), headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
+                    const rewritten = rewriteM3u8(text, rawUrl, '&vn=1', absoluteBase);
+                    return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
+                }
+                if (q.tt) {
+                    const buf = await upstream.arrayBuffer();
+                    const full = new Uint8Array(buf);
+                    const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
+                    return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
                 }
                 const buf = await upstream.arrayBuffer();
                 const full = new Uint8Array(buf);
