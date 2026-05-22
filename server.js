@@ -1,3 +1,17 @@
+const _originalFetch = globalThis.fetch;
+const IS_HF = !!process.env.SPACE_ID;
+
+const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
+
+globalThis.fetch = async (url, opts) => {
+    const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
+    if (IS_HF && /https?:\/\/api2?\.videasy\.net/i.test(urlStr)) {
+        const proxied = FALLBACK_BASE + '/api?url=' + encodeURIComponent(urlStr) + '&vn=1';
+        return _originalFetch(proxied, opts);
+    }
+    return _originalFetch(url, opts);
+};
+
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -7,8 +21,6 @@ import { SOURCES, SOURCE_MAP, CACHE_TTL } from './config.js';
 import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES } from './routes/subtitles.js';
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
-
-const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
 async function umamiTrack(event, data = {}) {
     try {
