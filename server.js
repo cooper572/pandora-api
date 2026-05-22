@@ -280,6 +280,9 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
         if (!text.trim().startsWith('#EXTM3U')) return { ok: false, error: 'response is not a valid m3u8' };
         const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
         const isMaster = lines.some(l => l.includes('#EXT-X-STREAM-INF'));
+
+        let segmentUrl;
+
         if (isMaster) {
             const variantLine = lines.find(l => !l.startsWith('#'));
             if (!variantLine) return { ok: false, error: 'no variant playlist found in master' };
@@ -293,14 +296,32 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
             const variantText = await variantRes.text();
             if (!variantText.trim().startsWith('#EXTM3U')) return { ok: false, error: 'variant response is not valid m3u8' };
             const vLines = variantText.split('\n').map(l => l.trim()).filter(Boolean);
-            const seg = vLines.find(l => !l.startsWith('#'));
-            if (!seg) return { ok: false, error: 'no segments in variant playlist' };
-            return { ok: true, error: null };
+            segmentUrl = vLines.find(l => !l.startsWith('#'));
+            if (!segmentUrl) return { ok: false, error: 'no segments in variant playlist' };
         } else {
-            const seg = lines.find(l => !l.startsWith('#'));
-            if (!seg) return { ok: false, error: 'no segments in playlist' };
-            return { ok: true, error: null };
+            segmentUrl = lines.find(l => !l.startsWith('#'));
+            if (!segmentUrl) return { ok: false, error: 'no segments in playlist' };
         }
+
+        if (!segmentUrl.startsWith('http')) {
+            return { ok: false, error: `segment URL is not absolute: ${segmentUrl.slice(0, 80)}` };
+        }
+
+        const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
+        const isProxied = segmentUrl.startsWith(safeBase) || segmentUrl.startsWith('https://missourimonster-vyla.hf.space') || segmentUrl.startsWith('https://cjbutimtired.tuvnord.hk');
+        if (!isProxied) {
+            return { ok: false, error: `segment not proxied, raw CDN URL leaked: ${segmentUrl.slice(0, 80)}` };
+        }
+
+        const segRes = await fetch(segmentUrl, {
+            method: 'HEAD',
+            signal: AbortSignal.timeout(10000),
+            headers: { 'User-Agent': getUA() },
+        });
+        segRes.body?.cancel();
+        if (!segRes.ok) return { ok: false, error: `segment fetch failed: ${segRes.status}` };
+
+        return { ok: true, error: null };
     } catch (err) {
         return { ok: false, error: err.message };
     }
