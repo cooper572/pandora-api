@@ -155,7 +155,9 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
         let decoded;
         try { decoded = decodeURIComponent(httpsAbs); } catch { decoded = httpsAbs; }
         const normalized = decoded.startsWith('http') ? decoded : httpsAbs;
-        return safeBase + '/api?url=' + encodeURIComponent(normalized) + extraParam;
+        const needsStrip = /seg\.html|enproxy|tiktokcdn|ibyteimg/i.test(normalized);
+        const ttParam = needsStrip ? '&tt=1' : '';
+        return safeBase + '/api?url=' + encodeURIComponent(normalized) + extraParam + ttParam;
     }).join('\n');
 }
 
@@ -313,13 +315,25 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
             return { ok: false, error: `segment not proxied, raw CDN URL leaked: ${segmentUrl.slice(0, 80)}` };
         }
 
+        const isTtSeg = /seg\.html|enproxy/i.test(segmentUrl);
         const segRes = await fetch(segmentUrl, {
-            method: 'HEAD',
+            method: 'GET',
             signal: AbortSignal.timeout(10000),
-            headers: { 'User-Agent': getUA() },
+            headers: { 'User-Agent': getUA(), 'Range': 'bytes=0-187' },
         });
-        segRes.body?.cancel();
-        if (!segRes.ok) return { ok: false, error: `segment fetch failed: ${segRes.status}` };
+        if (segRes.status !== 200 && segRes.status !== 206 && segRes.status !== 416) {
+            return { ok: false, error: `segment fetch failed: ${segRes.status}` };
+        }
+        if (isTtSeg) {
+            const buf = await segRes.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const checkAt = bytes.length > 120 ? bytes[120] : bytes[0];
+            if (checkAt !== 0x47) {
+                return { ok: false, error: `segment bytes invalid after strip: first byte after offset is 0x${checkAt.toString(16)}` };
+            }
+        } else {
+            segRes.body?.cancel();
+        }
 
         return { ok: true, error: null };
     } catch (err) {
@@ -479,6 +493,17 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     const elapsed = Date.now() - start;
     const wrappedUrl = bestRaw ? wrapUrl(bestRaw, sourceKey, absoluteBase) : null;
     const rawUrl = bestRaw?.url ?? null;
+
+    if (wrappedUrl && mod.SKIP_VERIFY) {
+        const hlsCheck = await verifyHlsPlayable(wrappedUrl, absoluteBase);
+        if (!hlsCheck.ok) {
+            return {
+                status: 200,
+                body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
+                contentType: 'application/json',
+            };
+        }
+    }
 
     if (wrappedUrl && !mod.SKIP_VERIFY) {
         const rawHeaders = bestRaw?.headers || {};
@@ -804,21 +829,25 @@ async function handleRequest(req) {
                     const isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl);
                     if (isTikTok || isPngMasked) {
                         if (!upstream.ok) {
-                            return { status: 502, body: `upstream ${upstream.status} for ${cleanUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
+                            return { status: upstream.status, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                         }
                         const buf = await upstream.arrayBuffer();
                         const full = new Uint8Array(buf);
                         const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
                         return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
                     }
-                    if (!upstream.ok) {
-                        return { status: 502, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
-                    }
-                    if (q.tt) {
+                    const needsStrip = q.tt || /seg\.html|enproxy/i.test(cleanUrl);
+                    if (needsStrip) {
+                        if (!upstream.ok) {
+                            return { status: upstream.status, body: `upstream ${upstream.status} for ${cleanUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
+                        }
                         const buf = await upstream.arrayBuffer();
                         const full = new Uint8Array(buf);
-                        const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
+                        const stripped = (full[0] === 0x89 || full[0] === 0xFF || full[0] === 0x00) ? full.slice(120) : full;
                         return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
+                    }
+                    if (!upstream.ok) {
+                        return { status: upstream.status, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                     }
                     const finalCt = isMkv ? 'video/mp4' : (ct === 'application/octet-stream' ? 'video/mp4' : (ct || 'video/mp4'));
                     const rangeHeader = req.headers['range'];
@@ -858,9 +887,9 @@ async function handleRequest(req) {
                 }
                 const buf = await upstream.arrayBuffer();
                 const full = new Uint8Array(buf);
-                const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(rawUrl);
-                const stripped = isTikTok && full[0] === 0x89 ? full.slice(120) : full;
-                return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': ct || 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
+                const needsStrip = /tiktokcdn\.com|ibyteimg\.com|seg\.html|enproxy/i.test(rawUrl) || q.tt;
+                const stripped = needsStrip && (full[0] === 0x89 || full[0] === 0xFF || full[0] === 0x00) ? full.slice(120) : full;
+                return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', ...corsHeaders, 'Cache-Control': 'public, max-age=3600' } };
             } catch (e) {
                 return { status: 502, body: e.message, headers: corsHeaders };
             }
