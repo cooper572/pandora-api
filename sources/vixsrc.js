@@ -16,15 +16,21 @@ let _selfBase = null;
 export function setSelfBase(base) { _selfBase = base; }
 
 async function proxyFetch(url, asJson = false) {
-    if (_selfBase) {
-        const proxied = `${_selfBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`;
-        const res = await fetch(proxied);
+    const target = _selfBase
+        ? `${_selfBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`
+        : url;
+    const fetchOpts = _selfBase ? {} : { headers: HEADERS };
+    try {
+        const res = await fetch(target, fetchOpts);
         if (!res || res.status !== 200) return null;
-        return asJson ? res.json() : res.text();
+        if (asJson) {
+            const text = await res.text();
+            try { return JSON.parse(text); } catch { return null; }
+        }
+        return res.text();
+    } catch {
+        return null;
     }
-    const res = await fetch(url, { headers: HEADERS });
-    if (!res || res.status !== 200) return null;
-    return asJson ? res.json() : res.text();
 }
 
 function buildApiUrl(id, s, e) {
