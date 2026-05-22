@@ -17,8 +17,9 @@ export const MULTI_URL = true;
 function getHeaders() {
     return {
         'User-Agent': getUA(),
-        'referer': `${IFRAME_URL}/`,
-        'origin': IFRAME_URL,
+        'Referer': `${IFRAME_URL}/`,
+        'Origin': IFRAME_URL,
+        'Accept': '*/*',
     };
 }
 
@@ -35,19 +36,22 @@ export async function getStream(id, s, e) {
         url.searchParams.set('type', 'movie');
     }
 
-    const res = await fetch(url.toString(), { headers });
-    if (!res.ok) return null;
+    try {
+        const res = await fetch(url.toString(), { headers, signal: AbortSignal.timeout(10000) });
+        if (!res.ok) return null;
 
-    const json = await res.json();
-    if (json.status_code !== '200' || !json.data) return null;
+        const json = await res.json();
+        if (json.status_code !== '200' || !json.data) return null;
 
-    const streamUrls = (json.data.stream_urls ?? []).filter(
-        u => !u.includes('strategicgrowthpartners')
-    );
+        const allUrls = (json.data.stream_urls ?? [])
+            .filter(u => !u.includes('tmstrd.justhd.tv'))
+            .map(u => ({ url: u, headers }));
 
-    if (!streamUrls.length) return null;
-
-    return {
-        allUrls: streamUrls.map(u => ({ url: u, headers })),
-    };
+        if (!allUrls.length) return null;
+        return { allUrls };
+    } catch {
+        return null;
+    }
 }
+
+export const VERIFY_HEADERS = getHeaders();
