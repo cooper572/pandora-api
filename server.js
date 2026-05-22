@@ -175,25 +175,34 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
         );
     }
 
+    const primaryTimeout = fallbackBase ? Math.floor(cfg.timeout * 0.6) : cfg.timeout;
+    const fallbackTimeout = cfg.timeout - primaryTimeout;
+
     return withTimeout(
         jitter(cfg.jitter).then(async () => {
-            const primary = await getCached(
-                `${cfg.key}-${cacheKey}`,
-                () => withRetry(
-                    () => mod.getStream(id, s, e, clientIP, absoluteBase),
-                    cfg.retries,
-                    1000
-                )
-            );
-            if (primary) return primary;
-            if (fallbackBase) {
-                return getCached(
-                    `${cfg.key}-fallback-${cacheKey}`,
+            const primary = await withTimeout(
+                getCached(
+                    `${cfg.key}-${cacheKey}`,
                     () => withRetry(
-                        () => mod.getStream(id, s, e, clientIP, fallbackBase),
+                        () => mod.getStream(id, s, e, clientIP, absoluteBase),
                         cfg.retries,
                         1000
                     )
+                ),
+                primaryTimeout
+            );
+            if (primary) return primary;
+            if (fallbackBase) {
+                return withTimeout(
+                    getCached(
+                        `${cfg.key}-fallback-${cacheKey}`,
+                        () => withRetry(
+                            () => mod.getStream(id, s, e, clientIP, fallbackBase),
+                            cfg.retries,
+                            1000
+                        )
+                    ),
+                    fallbackTimeout
                 );
             }
             return null;
