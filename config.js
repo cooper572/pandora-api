@@ -10,7 +10,7 @@ export const SOURCES = [
     { key: 'vixsrc', sourceFile: 'vixsrc', label: 'VixSrc', proxyParam: 'vx', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 20000, jitter: 900, retries: 3, sourcesTimeout: 5000 },
     { key: 'streammafia', sourceFile: 'streammafia', label: 'streammafia', proxyParam: 'sm', timeout: 25000, jitter: 600, retries: 2, disabled: true },
-    { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 35000, jitter: 600, retries: 1, disabled: true },
+    { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 35000, jitter: 600, retries: 1 },
     { key: 'moviebox', sourceFile: 'moviebox', label: 'MovieBox', proxyParam: 'mb', timeout: 25000, jitter: 500, retries: 2, sourcesTimeout: 8000, disabled: true },
     { key: 'vidnest', sourceFile: 'vidnest', label: 'VidNest', proxyParam: 'vn', timeout: 20000, jitter: 600, retries: 3, disabled: true },
     { key: 'popr', sourceFile: 'popr', label: 'Popr', proxyParam: 'pp', timeout: 20000, jitter: 600, retries: 2, disabled: true },
