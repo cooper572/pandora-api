@@ -503,7 +503,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             const wrapped = wrapUrl(candidate, sourceKey, absoluteBase);
             if (!wrapped) continue;
             const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, !!candidate?.skipProxy);
-            if (hlsCheck.ok) {
+            if (hlsCheck.ok || hlsCheck.error?.includes('429')) {
                 bestRaw = candidate;
                 wrappedUrl = wrapped;
                 break;
