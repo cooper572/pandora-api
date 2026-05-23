@@ -506,11 +506,25 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
         if (!bestRaw?.skipProxy) {
             const hlsCheck = await verifyHlsPlayable(wrappedUrl, absoluteBase);
             if (!hlsCheck.ok) {
-                return {
-                    status: 200,
-                    body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
-                    contentType: 'application/json',
-                };
+                let isDirectStream = false;
+                try {
+                    const headRes = await fetch(wrappedUrl, {
+                        method: 'HEAD',
+                        headers: { 'User-Agent': getUA() },
+                        signal: AbortSignal.timeout(8000),
+                        redirect: 'follow',
+                    });
+                    headRes.body?.cancel();
+                    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+                    isDirectStream = headRes.status < 400 && (ct.includes('video') || ct.includes('octet-stream') || ct.includes('mp4'));
+                } catch { }
+                if (!isDirectStream) {
+                    return {
+                        status: 200,
+                        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
+                        contentType: 'application/json',
+                    };
+                }
             }
         }
     }
