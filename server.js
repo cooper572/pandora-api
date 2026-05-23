@@ -5,7 +5,7 @@ const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
 globalThis.fetch = async (url, opts) => {
     const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
-    if (IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site)/i.test(urlStr)) {
+    if (IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site|cloudnestra\.com)/i.test(urlStr)) {
         const proxied = FALLBACK_BASE + '/api?url=' + encodeURIComponent(urlStr) + '&vn=1';
         return _originalFetch(proxied, opts);
     }
@@ -500,6 +500,8 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     if (rawResult) {
         if (mod.MULTI_URL && rawResult?.allUrls?.length) {
             candidates = rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u });
+        } else if (Array.isArray(rawResult)) {
+            candidates = rawResult.map(u => typeof u === 'object' ? u : { url: u });
         } else {
             const raw = typeof rawResult === 'object' ? rawResult.url : rawResult;
             if (raw) candidates = [{ url: raw, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }];
