@@ -310,7 +310,11 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
         }
 
         const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
-        const isProxied = segmentUrl.startsWith(safeBase) || segmentUrl.startsWith('https://missourimonster-vyla.hf.space') || segmentUrl.startsWith('https://cjbutimtired.tuvnord.hk');
+        const isProxied = segmentUrl.startsWith(safeBase) ||
+            segmentUrl.startsWith('https://missourimonster-vyla.hf.space') ||
+            segmentUrl.startsWith('https://cjbutimtired.tuvnord.hk') ||
+            segmentUrl.startsWith('https://pronhub.tulnex.com') ||
+            segmentUrl.startsWith('https://prxy.tulnex.com');
         if (!isProxied) {
             return { ok: false, error: `segment not proxied, raw CDN URL leaked: ${segmentUrl.slice(0, 80)}` };
         }
@@ -362,8 +366,10 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
                 const results = await Promise.all(c.raw.allUrls.map(async (rawUrl, i) => {
                     const wrapped = wrapUrl(rawUrl, c.source, absoluteBase);
                     if (!wrapped) return null;
-                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
-                    if (!hlsCheck.ok) return null;
+                    if (!rawUrl?.skipProxy) {
+                        const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                        if (!hlsCheck.ok) return null;
+                    }
                     return {
                         source: c.source,
                         label: `${cfg?.label ?? c.source} ${i + 1}`,
@@ -376,8 +382,10 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
             if (mod.SKIP_VERIFY) {
                 const wrapped = wrapUrl(c.raw, c.source, absoluteBase);
                 if (!wrapped) return [null];
-                const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
-                if (!hlsCheck.ok) return [null];
+                if (!c.raw?.skipProxy) {
+                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                    if (!hlsCheck.ok) return [null];
+                }
                 return [{
                     source: c.source,
                     label: cfg?.label ?? c.source,
@@ -495,13 +503,15 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     const rawUrl = bestRaw?.url ?? null;
 
     if (wrappedUrl && mod.SKIP_VERIFY) {
-        const hlsCheck = await verifyHlsPlayable(wrappedUrl, absoluteBase);
-        if (!hlsCheck.ok) {
-            return {
-                status: 200,
-                body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
-                contentType: 'application/json',
-            };
+        if (!bestRaw?.skipProxy) {
+            const hlsCheck = await verifyHlsPlayable(wrappedUrl, absoluteBase);
+            if (!hlsCheck.ok) {
+                return {
+                    status: 200,
+                    body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
+                    contentType: 'application/json',
+                };
+            }
         }
     }
 
