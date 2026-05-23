@@ -4,7 +4,7 @@ const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
 globalThis.fetch = async (url, opts) => {
     const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
-    const needsProxy = IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site|cloudnestra\.com|(www\.)?lookmovie2?\.to|(www\.)?lookmovie\.foundation|.*\.theaky\.store|.*\.akamaihd\.net)/i.test(urlStr);
+    const needsProxy = IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site|cloudnestra\.com|(www\.)?lookmovie2?\.to|(www\.)?lookmovie\.foundation|.*\.theaky\.store|.*\.akamaihd\.net|.*\.vix-content\.net|vixsrc\.to)/i.test(urlStr);
 
     if (needsProxy) {
         let proxied = FALLBACK_BASE + '/api?url=' + encodeURIComponent(urlStr) + '&vn=1';

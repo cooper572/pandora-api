@@ -7,7 +7,7 @@ export const SOURCES = [
     { key: 'icefy', sourceFile: 'icefy', label: 'Icefy', proxyParam: 'iy', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 10000 },
     { key: 'vidrock', sourceFile: 'vidrock', label: 'VidRock', proxyParam: 'vr', timeout: 20000, jitter: 800, retries: 3 },
     { key: 'vidsrc', sourceFile: 'vidsrc', label: 'VidSrc', proxyParam: 'vs', timeout: 20000, jitter: 700, retries: 2, sourcesTimeout: 10000 },
-    { key: 'vixsrc', sourceFile: 'vixsrc', label: 'VixSrc', proxyParam: 'vx', timeout: 20000, jitter: 500, retries: 2 },
+    { key: 'vixsrc', label: 'VixSrc', sourceFile: 'vixsrc', proxyParam: 'vx', timeout: 35000, retries: 2, jitter: 0, skipProxy: false },
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 40000, jitter: 900, retries: 3, sourcesTimeout: 10000 },
     { key: 'streammafia', sourceFile: 'streammafia', label: 'streammafia', proxyParam: 'sm', timeout: 20000, jitter: 600, retries: 2, disabled: true },
     { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 35000, jitter: 600, retries: 1 },
