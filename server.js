@@ -326,57 +326,47 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
     const fallbackBase = isFallbackNeeded(absoluteBase.replace('https://', '').replace('http://', '')) ? FALLBACK_BASE : '';
 
     const results = [];
-    const settled = new Array(SOURCES.filter(c => !c.disabled).length).fill(false);
 
-    await Promise.all(
-        SOURCES.filter(cfg => !cfg.disabled).map(async (cfg) => {
-            try {
-                const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
-                if (!raw) return;
-
-                const mod = SOURCE_MODULES[cfg.key];
-
-                if (mod.SKIP_VERIFY) {
-                    const urls = mod.MULTI_URL && raw?.allUrls?.length ? raw.allUrls : [raw];
-                    for (const rawUrl of urls) {
-                        const wrapped = wrapUrl(rawUrl, cfg.key, absoluteBase);
-                        if (!wrapped) continue;
-                        const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
-                        if (hlsCheck.ok || hlsCheck.error?.includes('429') || hlsCheck.error?.includes('timeout') || hlsCheck.error?.includes('aborted')) {
-                            results.push({
-                                source: cfg.key,
-                                label: cfg.label ?? cfg.key,
-                                url: wrapped,
-                            });
-                            break;
-                        }
-                    }
-                    return;
-                }
-
-                const allUrls = raw?.allUrls
-                    ? raw.allUrls.map(u => typeof u === 'object' ? u : { url: u })
-                    : [raw];
-
-                for (const candidate of allUrls) {
-                    const rawUrl = typeof candidate === 'object' ? candidate.url : candidate;
-                    const ok = await verifyStream(rawUrl, cfg.key);
-                    if (!ok) continue;
-                    const wrapped = wrapUrl(candidate, cfg.key, absoluteBase);
+    const sourcePromises = SOURCES.filter(cfg => !cfg.disabled).map(async (cfg) => {
+        try {
+            const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
+            if (!raw) return;
+            const mod = SOURCE_MODULES[cfg.key];
+            if (mod.SKIP_VERIFY) {
+                const urls = mod.MULTI_URL && raw?.allUrls?.length ? raw.allUrls : [raw];
+                for (const rawUrl of urls) {
+                    const wrapped = wrapUrl(rawUrl, cfg.key, absoluteBase);
                     if (!wrapped) continue;
-                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
-                    if (hlsCheck.ok) {
-                        results.push({
-                            source: cfg.key,
-                            label: cfg.label ?? cfg.key,
-                            url: wrapped,
-                        });
+                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
+                    if (hlsCheck.ok || hlsCheck.error?.includes('429') || hlsCheck.error?.includes('timeout') || hlsCheck.error?.includes('aborted')) {
+                        results.push({ source: cfg.key, label: cfg.label ?? cfg.key, url: wrapped });
                         break;
                     }
                 }
-            } catch { }
-        })
-    );
+                return;
+            }
+            const allUrls = raw?.allUrls
+                ? raw.allUrls.map(u => typeof u === 'object' ? u : { url: u })
+                : [raw];
+            for (const candidate of allUrls) {
+                const rawUrl = typeof candidate === 'object' ? candidate.url : candidate;
+                const ok = await verifyStream(rawUrl, cfg.key);
+                if (!ok) continue;
+                const wrapped = wrapUrl(candidate, cfg.key, absoluteBase);
+                if (!wrapped) continue;
+                const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                if (hlsCheck.ok || hlsCheck.error?.includes('429') || hlsCheck.error?.includes('timeout') || hlsCheck.error?.includes('aborted')) {
+                    results.push({ source: cfg.key, label: cfg.label ?? cfg.key, url: wrapped });
+                    break;
+                }
+            }
+        } catch { }
+    });
+
+    await Promise.race([
+        Promise.all(sourcePromises),
+        new Promise(resolve => setTimeout(resolve, 12000))
+    ]);
 
     return results;
 }
@@ -423,7 +413,8 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
 
     const mod = SOURCE_MODULES[sourceKey];
 
-    let rawResult = null;
+    let rawResult = await withTimeout(mod.getStream(id, s, e, null, effectiveBase), 10000);
+
     let fetchError = null;
     try {
         const fallbackBase = isFallbackNeeded(host) ? FALLBACK_BASE : '';
