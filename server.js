@@ -306,6 +306,7 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
         if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence') || text.includes('429') || text.includes('Cloudflare')) {
             return { ok: false, error: 'Proxy Blocked or Invalid Hash' };
         }
+
         if (!text.trim().startsWith('#EXTM3U')) return { ok: false, error: 'response is not a valid m3u8' };
 
         const lines = text.split('\n').map(l => l.trim());
@@ -341,7 +342,7 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
                         const wrapped = wrapUrl(rawUrl, cfg.key, absoluteBase);
                         if (!wrapped) continue;
                         const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
-                        if (hlsCheck.ok || hlsCheck.error?.includes('429')) {
+                        if (hlsCheck.ok || hlsCheck.error?.includes('429') || hlsCheck.error?.includes('timeout') || hlsCheck.error?.includes('aborted')) {
                             results.push({
                                 source: cfg.key,
                                 label: cfg.label ?? cfg.key,
@@ -464,7 +465,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             const wrapped = wrapUrl(candidate, sourceKey, absoluteBase);
             if (!wrapped) continue;
             const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, !!candidate?.skipProxy);
-            if (hlsCheck.ok || hlsCheck.error?.includes('429')) {
+            if (hlsCheck.ok || hlsCheck.error?.includes('429') || hlsCheck.error?.includes('timeout') || hlsCheck.error?.includes('aborted')) {
                 bestRaw = candidate;
                 wrappedUrl = wrapped;
                 break;
