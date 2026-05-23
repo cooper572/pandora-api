@@ -284,7 +284,7 @@ async function verifyStream(rawUrl, sourceKey) {
 async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, skipProxyCheck = false) {
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 6000);
+        const timeout = setTimeout(() => controller.abort(), 12000);
 
         const m3u8Res = await fetch(proxiedUrl, {
             signal: controller.signal,
@@ -293,12 +293,53 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
         clearTimeout(timeout);
 
         if (!m3u8Res.ok) return { ok: false, error: `m3u8 fetch failed: ${m3u8Res.status}` };
-        const text = await m3u8Res.text();
+        let text = await m3u8Res.text();
 
-        if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence') || text.includes('429')) {
+        if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence') || text.includes('429') || text.includes('Cloudflare')) {
             return { ok: false, error: 'Proxy Blocked or Invalid Hash' };
         }
         if (!text.trim().startsWith('#EXTM3U')) return { ok: false, error: 'response is not a valid m3u8' };
+
+        let mediaPlaylistUrl = proxiedUrl;
+        if (text.includes('#EXT-X-STREAM-INF')) {
+            const lines = text.split('\n').map(l => l.trim());
+            let variantPath = '';
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i].startsWith('#EXT-X-STREAM-INF') && lines[i + 1] && !lines[i + 1].startsWith('#')) {
+                    variantPath = lines[i + 1];
+                    break;
+                }
+            }
+            if (variantPath) {
+                mediaPlaylistUrl = variantPath.startsWith('http') ? variantPath : new URL(variantPath, proxiedUrl).href;
+                const variantRes = await fetch(mediaPlaylistUrl, {
+                    headers: { 'User-Agent': getUA(), ...extraHeaders },
+                    signal: AbortSignal.timeout(6000)
+                });
+                if (!variantRes.ok) return { ok: false, error: `variant fetch failed: ${variantRes.status}` };
+                text = await variantRes.text();
+            }
+        }
+
+        const segmentLines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+        if (segmentLines.length === 0) return { ok: false, error: 'no segments found in playlist' };
+
+        const firstSegment = segmentLines[0];
+        const segmentUrl = firstSegment.startsWith('http') ? firstSegment : new URL(firstSegment, mediaPlaylistUrl).href;
+
+        const segCheck = await fetch(segmentUrl, {
+            method: 'HEAD',
+            headers: { 'User-Agent': getUA(), ...extraHeaders },
+            signal: AbortSignal.timeout(6000)
+        });
+
+        if (segCheck.status >= 400) {
+            const segRetry = await fetch(segmentUrl, {
+                headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': 'bytes=0-1023' },
+                signal: AbortSignal.timeout(6000)
+            });
+            if (!segRetry.ok) return { ok: false, error: `segment verification failed: ${segRetry.status}` };
+        }
 
         return { ok: true, error: null };
     } catch (err) {
