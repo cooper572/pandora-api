@@ -76,7 +76,9 @@ export async function getStream(id, s, e, clientIP = null, selfBase = null) {
         if (!cleaned.startsWith('#EXTM3U')) return null;
 
         const variantUrl = getBestVariantUrl(cleaned, masterUrl);
-        return variantUrl ?? masterUrl;
+        const finalUrl = variantUrl ?? masterUrl;
+
+        return { url: finalUrl, headers: HEADERS, skipProxy: false };
     } catch {
         return null;
     }
