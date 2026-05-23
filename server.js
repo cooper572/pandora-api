@@ -829,6 +829,10 @@ async function handleRequest(req) {
 
     if (pathname === '/api' || pathname === '/api/') {
         if (q.url || q.proxy) {
+            if (IS_HF && q.lm == '1') {
+                const redirectUrl = FALLBACK_BASE + req.url;
+                return { status: 302, body: '', headers: { 'Location': redirectUrl, ...corsHeaders } };
+            }
             try {
                 const rawUrl = q.url || q.proxy;
                 try { new URL(rawUrl); } catch (e) { throw new Error('invalid url'); }
