@@ -4,8 +4,11 @@ const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
 globalThis.fetch = async (url, opts) => {
     const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
-    if (IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site|cloudnestra\.com)/i.test(urlStr)) {
-        const proxied = FALLBACK_BASE + '/api?url=' + encodeURIComponent(urlStr) + '&vn=1';
+    if (IS_HF && /https?:\/\/(api2?\.videasy\.net|api\.tulnex\.com|strategicgrowthpartners\.site|cloudnestra\.com|(www\.)?lookmovie2?\.to|(www\.)?lookmovie\.foundation)/i.test(urlStr)) {
+        let proxied = FALLBACK_BASE + '/api?url=' + encodeURIComponent(urlStr) + '&vn=1';
+        if (opts?.headers) {
+            proxied += '&proxyHeaders=' + encodeURIComponent(JSON.stringify(opts.headers));
+        }
         return _originalFetch(proxied, opts);
     }
     return _originalFetch(url, opts);
