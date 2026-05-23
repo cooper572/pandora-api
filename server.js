@@ -69,6 +69,15 @@ function getAbsoluteBase(host) {
     return isLocal ? `http://${host}` : `https://${host}`;
 }
 
+function getEffectiveBase(absoluteBase) {
+    if (IS_HF) return FALLBACK_BASE;
+    return absoluteBase;
+}
+
+function isFallbackNeeded(host) {
+    return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
+}
+
 const UA_LIST = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
@@ -161,12 +170,9 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
     }).join('\n');
 }
 
-function isFallbackNeeded(host) {
-    return !host.startsWith('localhost') && !host.startsWith('127.0.0.1');
-}
-
 function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = '', fallbackBase = '') {
     const mod = SOURCE_MODULES[cfg.key];
+    const effectiveBase = getEffectiveBase(absoluteBase);
 
     if (cfg.multiBase) {
         return withTimeout(
@@ -198,7 +204,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
                 getCached(
                     `${cfg.key}-${cacheKey}`,
                     () => withRetry(
-                        () => mod.getStream(id, s, e, clientIP, absoluteBase),
+                        () => mod.getStream(id, s, e, clientIP, effectiveBase),
                         cfg.retries,
                         1000
                     )
@@ -447,6 +453,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
     const cfg = SOURCE_MAP[sourceKey];
     const absoluteBase = getAbsoluteBase(host);
+    const effectiveBase = getEffectiveBase(absoluteBase);
 
     if (cfg?.disabled) {
         return {
@@ -466,10 +473,10 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
         }
         if (!rawResult) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, null, absoluteBase), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, effectiveBase), 30000);
         }
         if (!rawResult && isFallbackNeeded(host)) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, fallbackBase, fallbackBase), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE), 30000);
         }
     } catch (err) {
         fetchError = err.message;
