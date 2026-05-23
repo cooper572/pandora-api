@@ -122,7 +122,7 @@ export async function getStream(id, s, e) {
             throw new Error(`vidsrc step3: no m3u8 url found in player JS`);
         }
 
-        return { allUrls: urls.map(url => ({ url, headers: PROXY_HEADERS })) };
+        return urls[0];
     } finally {
         controller.abort();
     }
@@ -144,6 +144,3 @@ export async function proxyStream(url, res, { fetchUpstream, rewriteM3u8 }) {
     res.setHeader('Cache-Control', 'public, max-age=3600');
     upstream.pipe(res);
 }
-
-export const SKIP_VERIFY = true;
-export const MULTI_URL = true;

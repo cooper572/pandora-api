@@ -1,6 +1,5 @@
 const _originalFetch = globalThis.fetch;
 const IS_HF = !!process.env.SPACE_ID;
-
 const FALLBACK_BASE = 'https://cjbutimtired.tuvnord.hk/strapi';
 
 globalThis.fetch = async (url, opts) => {
