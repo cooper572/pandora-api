@@ -382,7 +382,7 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
             if (mod.SKIP_VERIFY) {
                 const wrapped = wrapUrl(c.raw, c.source, absoluteBase);
                 if (!wrapped) return [null];
-                if (!c.raw?.skipProxy) {
+                if (!c.raw?.skipProxy && !c.raw?.skipHlsCheck) {
                     const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
                     if (!hlsCheck.ok) return [null];
                 }
@@ -481,87 +481,53 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             candidates = rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u });
         } else {
             const raw = typeof rawResult === 'object' ? rawResult.url : rawResult;
-            if (raw) candidates = [{ url: raw, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy }];
+            if (raw) candidates = [{ url: raw, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }];
         }
     }
 
     let bestRaw = null;
-    for (const candidate of candidates) {
-        if (mod.SKIP_VERIFY) {
-            bestRaw = candidate;
-            break;
-        }
-        const ok = await verifyStream(candidate.url, sourceKey);
-        if (ok) {
-            bestRaw = candidate;
-            break;
-        }
-    }
+    let wrappedUrl = null;
 
-    const elapsed = Date.now() - start;
-    const wrappedUrl = bestRaw ? wrapUrl(bestRaw, sourceKey, absoluteBase) : null;
-    const rawUrl = bestRaw?.url ?? null;
-
-    if (wrappedUrl && mod.SKIP_VERIFY) {
-        if (!bestRaw?.skipProxy) {
-            const hlsCheck = await verifyHlsPlayable(wrappedUrl, absoluteBase);
-            if (!hlsCheck.ok) {
-                let isDirectStream = false;
-                try {
-                    const headRes = await fetch(wrappedUrl, {
-                        method: 'HEAD',
-                        headers: { 'User-Agent': getUA() },
-                        signal: AbortSignal.timeout(8000),
-                        redirect: 'follow',
-                    });
-                    headRes.body?.cancel();
-                    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-                    isDirectStream = headRes.status < 400 && (ct.includes('video') || ct.includes('octet-stream') || ct.includes('mp4'));
-                } catch { }
-                if (!isDirectStream) {
-                    return {
-                        status: 200,
-                        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: hlsCheck.error }, null, 2),
-                        contentType: 'application/json',
-                    };
-                }
+    if (mod.SKIP_VERIFY) {
+        for (const candidate of candidates) {
+            if (candidate?.skipProxy || candidate?.skipHlsCheck) {
+                bestRaw = candidate;
+                wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
+                break;
+            }
+            const wrapped = wrapUrl(candidate, sourceKey, absoluteBase);
+            if (!wrapped) continue;
+            const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+            if (hlsCheck.ok) {
+                bestRaw = candidate;
+                wrappedUrl = wrapped;
+                break;
+            }
+            let isDirectStream = false;
+            try {
+                const headRes = await fetch(wrapped, {
+                    method: 'HEAD',
+                    headers: { 'User-Agent': getUA() },
+                    signal: AbortSignal.timeout(8000),
+                    redirect: 'follow',
+                });
+                headRes.body?.cancel();
+                const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+                isDirectStream = headRes.status < 400 && (ct.includes('video') || ct.includes('octet-stream') || ct.includes('mp4'));
+            } catch { }
+            if (isDirectStream) {
+                bestRaw = candidate;
+                wrappedUrl = wrapped;
+                break;
             }
         }
     }
 
-    if (wrappedUrl && !mod.SKIP_VERIFY) {
-        const rawHeaders = bestRaw?.headers || {};
-        const proxiedBody = await fetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } })
-            .then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message);
-        const [proxiedCheck, rawCheck] = await Promise.all([
-            verifyHlsPlayable(wrappedUrl, absoluteBase),
-            rawUrl ? verifyHlsPlayable(rawUrl, absoluteBase, rawHeaders) : Promise.resolve({ ok: null, error: 'no raw url' }),
-        ]);
-        if (!proxiedCheck.ok) {
-            return {
-                status: 200,
-                body: JSON.stringify({
-                    source: sourceKey, id, s: s || null, e: e || null,
-                    ok: false, url: null, raw_url: rawUrl, elapsed_ms: Date.now() - start,
-                    error: proxiedCheck.error,
-                    debug: {
-                        proxy_failed: true,
-                        proxy_error: proxiedCheck.error,
-                        proxy_body_preview: proxiedBody,
-                        raw_reachable: rawCheck.ok,
-                        raw_error: rawCheck.error,
-                        raw_headers_used: rawHeaders,
-                        proxied_url: wrappedUrl,
-                    },
-                }, null, 2),
-                contentType: 'application/json',
-            };
-        }
-    }
+    const rawUrl = bestRaw?.url ?? null;
 
     return {
         status: 200,
-        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: !!wrappedUrl, url: wrappedUrl, raw_url: rawUrl, elapsed_ms: elapsed, error: fetchError }, null, 2),
+        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: !!wrappedUrl, url: wrappedUrl, raw_url: rawUrl, elapsed_ms: Date.now() - start, error: fetchError }, null, 2),
         contentType: 'application/json',
     };
 }

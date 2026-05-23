@@ -1,5 +1,3 @@
-// vidnest itself is compromised, their player is entirely compromised returning sources that redirect to aware domains
-
 const BASE_URL = 'https://vidnest.fun';
 const API_BASE_URL = 'https://new.vidnest.fun';
 
@@ -10,21 +8,6 @@ const HEADERS = {
     'Referer': `${BASE_URL}/`,
     'Origin': BASE_URL,
 };
-
-export const CDN_HEADERS = [
-    {
-        pattern: /letsgocdn\d+\.shop/i,
-        headers: {
-            'Referer': 'https://goodstream.cc/',
-            'Origin': 'https://goodstream.cc',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'cross-site',
-        },
-    },
-];
 
 const VIDNEST_ALPHABET = 'RB0fpH8ZEyVLkv7c2i6MAJ5u3IKFDxlS1NTsnGaqmXYdUrtzjwObCgQP94hoeW+/=';
 
@@ -56,86 +39,23 @@ function decrypt(payload) {
     return JSON.parse(decodeVidnestBase64(payload));
 }
 
-const SERVERS = [
-    { path: 'hollymoviehd', query: '' },
-    { path: 'vidlink', query: '' },
-    { path: 'onehd', query: '?server=upcloud' },
-    { path: 'klikxxi', query: '' },
-    { path: 'purstream', query: '' },
-    { path: 'allmovies', query: '' },
-    { path: 'moviebox', query: '' },
-];
-
-function extractResult(server, root) {
-    switch (server) {
-        case 'allmovies': {
-            const s = root.streams?.[0];
-            if (!s?.url) return null;
-            return s.headers ? { url: s.url, headers: s.headers } : s.url;
-        }
-        case 'hollymoviehd': {
-            const s = root.sources?.[0];
-            return s?.file || null;
-        }
-        case 'vidlink': {
-            const playlist = root.data?.stream?.playlist;
-            if (!playlist) return null;
-            const urlObj = new URL(playlist);
-            const embeddedHeaders = urlObj.searchParams.get('headers');
-            urlObj.searchParams.delete('headers');
-            urlObj.searchParams.delete('host');
-            const cleanUrl = urlObj.toString();
-            if (embeddedHeaders) {
-                try {
-                    return { url: cleanUrl, headers: JSON.parse(embeddedHeaders) };
-                } catch { }
-            }
-            return root.headers ? { url: cleanUrl, headers: root.headers } : cleanUrl;
-        }
-        case 'onehd': {
-            const url = root.url;
-            if (!url) return null;
-            return root.headers ? { url, headers: root.headers } : url;
-        }
-        case 'klikxxi': {
-            return root.sources?.[0]?.url || null;
-        }
-        case 'purstream': {
-            return root.sources?.[0]?.url || null;
-        }
-        case 'moviebox': {
-            const u = root.url?.[0];
-            return u?.link || null;
-        }
-        default:
-            return null;
-    }
-}
-
-async function fetchServer(serverPath, query, id, s, e) {
+async function fetchHollyMovieHd(id, s, e) {
     const segment = (s && e) ? `tv/${id}/${s}/${e}` : `movie/${id}`;
-    const url = `${API_BASE_URL}/${serverPath}/${segment}${query}`;
+    const url = `${API_BASE_URL}/hollymoviehd/${segment}`;
     const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(10000) });
     if (!res.ok) return null;
     const json = await res.json();
     if (!json.data) return null;
     const data = json.encrypted ? decrypt(json.data) : json.data;
-    return extractResult(serverPath, data);
+    const file = data.sources?.[0]?.file;
+    if (!file) return null;
+    return file;
 }
 
 export async function getStream(id, s, e) {
-    const results = await Promise.allSettled(
-        SERVERS.map(({ path, query }) => fetchServer(path, query, id, s, e))
-    );
-    for (const result of results) {
-        if (result.status === 'fulfilled' && result.value) {
-            const val = result.value;
-            if (typeof val === 'string') return { url: val, headers: HEADERS };
-            if (val && !val.headers) return { url: val.url, headers: HEADERS };
-            return val;
-        }
-    }
-    return null;
+    const url = await fetchHollyMovieHd(id, s, e);
+    if (!url) return null;
+    return { url, headers: HEADERS, skipHlsCheck: true };
 }
 
 export const VERIFY_HEADERS = { ...HEADERS };
