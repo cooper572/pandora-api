@@ -277,7 +277,7 @@ async function verifyStream(rawUrl, sourceKey) {
     } catch { return false; }
 }
 
-async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
+async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, skipProxyCheck = false) {
     try {
         const m3u8Res = await fetch(proxiedUrl, {
             signal: AbortSignal.timeout(20000),
@@ -291,11 +291,22 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
 
         let segmentUrl;
 
+        const playlistOrigin = (() => {
+            try {
+                const u = new URL(proxiedUrl);
+                return u.origin;
+            } catch { return absoluteBase; }
+        })();
+
         if (isMaster) {
             const variantLine = lines.find(l => !l.startsWith('#'));
             if (!variantLine) return { ok: false, error: 'no variant playlist found in master' };
             const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
-            const variantUrl = variantLine.startsWith('http') ? variantLine : safeBase + (variantLine.startsWith('/') ? variantLine : '/' + variantLine);
+            const variantUrl = variantLine.startsWith('http')
+                ? variantLine
+                : variantLine.startsWith('/')
+                    ? playlistOrigin + variantLine
+                    : safeBase + (variantLine.startsWith('/') ? variantLine : '/' + variantLine);
             const variantRes = await fetch(variantUrl, {
                 signal: AbortSignal.timeout(20000),
                 headers: { 'User-Agent': getUA(), ...extraHeaders },
@@ -315,14 +326,17 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}) {
             return { ok: false, error: `segment URL is not absolute: ${segmentUrl.slice(0, 80)}` };
         }
 
-        const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
-        const isProxied = segmentUrl.startsWith(safeBase) ||
-            segmentUrl.startsWith('https://missourimonster-vyla.hf.space') ||
-            segmentUrl.startsWith('https://cjbutimtired.tuvnord.hk') ||
-            segmentUrl.startsWith('https://pronhub.tulnex.com') ||
-            segmentUrl.startsWith('https://prxy.tulnex.com');
-        if (!isProxied) {
-            return { ok: false, error: `segment not proxied, raw CDN URL leaked: ${segmentUrl.slice(0, 80)}` };
+        if (!skipProxyCheck) {
+            const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
+            const isProxied = segmentUrl.startsWith(safeBase) ||
+                segmentUrl.startsWith('https://missourimonster-vyla.hf.space') ||
+                segmentUrl.startsWith('https://cjbutimtired.tuvnord.hk') ||
+                segmentUrl.startsWith('https://pronhub.tulnex.com') ||
+                segmentUrl.startsWith('https://prxy.tulnex.com') ||
+                segmentUrl.startsWith(playlistOrigin);
+            if (!isProxied) {
+                return { ok: false, error: `segment not proxied, raw CDN URL leaked: ${segmentUrl.slice(0, 80)}` };
+            }
         }
 
         const isTtSeg = /seg\.html|enproxy/i.test(segmentUrl);
@@ -373,7 +387,7 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
                     const wrapped = wrapUrl(rawUrl, c.source, absoluteBase);
                     if (!wrapped) return null;
                     if (!rawUrl?.skipProxy) {
-                        const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                        const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
                         if (!hlsCheck.ok) return null;
                     }
                     return {
@@ -389,7 +403,7 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
                 const wrapped = wrapUrl(c.raw, c.source, absoluteBase);
                 if (!wrapped) return [null];
                 if (!c.raw?.skipProxy && !c.raw?.skipHlsCheck) {
-                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                    const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
                     if (!hlsCheck.ok) return [null];
                 }
                 return [{
@@ -504,7 +518,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             }
             const wrapped = wrapUrl(candidate, sourceKey, absoluteBase);
             if (!wrapped) continue;
-            const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+            const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, !!candidate?.skipProxy);
             if (hlsCheck.ok) {
                 bestRaw = candidate;
                 wrappedUrl = wrapped;
@@ -534,7 +548,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             if (!ok) continue;
             const wrapped = wrapUrl(candidate, sourceKey, absoluteBase);
             if (!wrapped) continue;
-            const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+            const hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, false);
             if (!hlsCheck.ok) {
                 const rawHeaders = candidate?.headers || {};
                 const proxiedBody = await fetch(wrapped, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } })
@@ -767,7 +781,7 @@ async function handleRequest(req) {
                     const r = await fetch(wrapped, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } });
                     const txt = await r.text();
                     m3u8Preview = txt.slice(0, 400);
-                    hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase);
+                    hlsCheck = await verifyHlsPlayable(wrapped, absoluteBase, {}, !!(typeof raw === 'object' && raw?.skipProxy));
                 } catch (err) {
                     hlsCheck = { ok: false, error: err.message };
                 }
