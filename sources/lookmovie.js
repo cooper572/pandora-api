@@ -1,51 +1,69 @@
 const TMDB_BASE = 'https://api.themoviedb.org/3';
-const LM_BASE = 'https://www.lookmovie2.to';
+const LM_DOMAINS = ['https://www.lookmovie2.to', 'https://lookmovie2.to', 'https://lookmovie.foundation'];
 
 export const SKIP_VERIFY = true;
 export const MULTI_URL = true;
 export const VERIFY_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Referer': 'https://www.lookmovie2.to/',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-US,en;q=0.9',
 };
 
-const HEADERS = { ...VERIFY_HEADERS };
-
-async function searchLookMovie(type, title, year) {
+async function searchLookMovie(type, title, year, clientIP) {
     const endpoint = type === 'shows' ? 'shows' : 'movies';
-    const res = await fetch(
-        `${LM_BASE}/api/v1/${endpoint}/do-search/?q=${encodeURIComponent(title)}`,
-        { headers: HEADERS, signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const results = data?.result;
-    if (!results?.length) return null;
+    for (const base of LM_DOMAINS) {
+        try {
+            const headers = {
+                ...VERIFY_HEADERS,
+                'Accept': 'application/json, text/plain, */*',
+                'Referer': `${base}/`,
+                'Origin': base,
+                'X-Requested-With': 'XMLHttpRequest'
+            };
+            if (clientIP) headers['X-Forwarded-For'] = clientIP;
 
-    let exact = results.find(r => String(r.year) === String(year));
-    if (!exact) exact = results.find(r => r.title?.toLowerCase() === title.toLowerCase());
-    return exact ?? results[0] ?? null;
+            const res = await fetch(
+                `${base}/api/v1/${endpoint}/do-search/?q=${encodeURIComponent(title)}`,
+                { headers, signal: AbortSignal.timeout(5000) }
+            );
+            if (!res.ok) continue;
+            const data = await res.json();
+            const results = data?.result;
+            if (!results?.length) continue;
+
+            let exact = results.find(r => String(r.year) === String(year));
+            if (!exact) exact = results.find(r => r.title?.toLowerCase() === title.toLowerCase());
+
+            const match = exact ?? results[0];
+            if (match) return { match, base };
+        } catch { }
+    }
+    return null;
 }
 
-async function getPlayPageData(slug, type) {
+async function getPlayPageData(base, slug, type, clientIP) {
     const path = type === 'shows' ? 'shows' : 'movies';
-    const res = await fetch(
-        `${LM_BASE}/${path}/play/${slug}`,
-        {
-            headers: {
-                ...HEADERS,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-            },
-            signal: AbortSignal.timeout(10000)
-        }
-    );
-    if (!res.ok) return null;
-    const html = await res.text();
+    try {
+        const headers = {
+            ...VERIFY_HEADERS,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Referer': `${base}/`,
+        };
+        if (clientIP) headers['X-Forwarded-For'] = clientIP;
 
-    const hashMatch = html.match(/['"]?hash['"]?\s*[:=]\s*['"]([^'"]+)['"]/i);
-    const expiresMatch = html.match(/['"]?expires['"]?\s*[:=]\s*['"]?(\d+)['"]?/i);
-    if (!hashMatch || !expiresMatch) return null;
-    return { html, hash: hashMatch[1], expires: expiresMatch[1] };
+        const res = await fetch(
+            `${base}/${path}/play/${slug}`,
+            { headers, signal: AbortSignal.timeout(8000) }
+        );
+        if (!res.ok) return null;
+        const html = await res.text();
+
+        const hashMatch = html.match(/['"]?hash['"]?\s*[:=]\s*['"]([^'"]+)['"]/i);
+        const expiresMatch = html.match(/['"]?expires['"]?\s*[:=]\s*['"]?(\d+)['"]?/i);
+        if (!hashMatch || !expiresMatch) return null;
+        return { html, hash: hashMatch[1], expires: expiresMatch[1] };
+    } catch {
+        return null;
+    }
 }
 
 async function getEpisodeId(html, s, e) {
@@ -103,30 +121,37 @@ async function getMovieId(html) {
     return match ? match[1] : null;
 }
 
-async function getStreams(type, id, hash, expires) {
-    const endpoint = type === 'shows'
-        ? `episode-access?id_episode=${id}`
-        : `movie-access?id_movie=${id}`;
-    const res = await fetch(
-        `${LM_BASE}/api/v1/security/${endpoint}&hash=${hash}&expires=${expires}`,
-        {
-            headers: {
-                ...HEADERS,
-                'X-Requested-With': 'XMLHttpRequest',
-            },
-            signal: AbortSignal.timeout(10000)
-        }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data?.success && !data?.streams) return null;
-    const streams = data?.streams || data;
-    if (!streams) return null;
-    const allUrls = Object.entries(streams)
-        .filter(([k, v]) => v && typeof v === 'string' && v.startsWith('http') && !k.toLowerCase().includes('auto'))
-        .map(([, v]) => v);
-    if (!allUrls.length) return null;
-    return { allUrls };
+async function getStreams(base, type, id, hash, expires, clientIP) {
+    try {
+        const endpoint = type === 'shows'
+            ? `episode-access?id_episode=${id}`
+            : `movie-access?id_movie=${id}`;
+
+        const headers = {
+            ...VERIFY_HEADERS,
+            'Accept': 'application/json, text/plain, */*',
+            'Referer': `${base}/`,
+            'X-Requested-With': 'XMLHttpRequest',
+        };
+        if (clientIP) headers['X-Forwarded-For'] = clientIP;
+
+        const res = await fetch(
+            `${base}/api/v1/security/${endpoint}&hash=${hash}&expires=${expires}`,
+            { headers, signal: AbortSignal.timeout(8000) }
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data?.success && !data?.streams) return null;
+        const streams = data?.streams || data;
+        if (!streams) return null;
+        const allUrls = Object.entries(streams)
+            .filter(([k, v]) => v && typeof v === 'string' && v.startsWith('http') && !k.toLowerCase().includes('auto'))
+            .map(([, v]) => v);
+        if (!allUrls.length) return null;
+        return { allUrls };
+    } catch {
+        return null;
+    }
 }
 
 export async function getStream(id, s = null, e = null, clientIP = null, effectiveBase = '') {
@@ -148,23 +173,24 @@ export async function getStream(id, s = null, e = null, clientIP = null, effecti
         const year = (tmdbData?.first_air_date || tmdbData?.release_date || '').slice(0, 4);
         if (!title) return null;
 
-        const match = await searchLookMovie(isTV ? 'shows' : 'movies', title, year);
-        if (!match) return null;
+        const searchRes = await searchLookMovie(isTV ? 'shows' : 'movies', title, year, clientIP);
+        if (!searchRes) return null;
+        const { match, base } = searchRes;
         const slug = match.slug;
         if (!slug) return null;
 
-        const pageData = await getPlayPageData(slug, isTV ? 'shows' : 'movies');
+        const pageData = await getPlayPageData(base, slug, isTV ? 'shows' : 'movies', clientIP);
         if (!pageData) return null;
         const { html, hash, expires } = pageData;
 
         if (isTV) {
             const streamId = await getEpisodeId(html, s, e);
             if (!streamId) return null;
-            return await getStreams('shows', streamId, hash, expires);
+            return await getStreams(base, 'shows', streamId, hash, expires, clientIP);
         } else {
             const movieId = match.id_movie || match.id || await getMovieId(html);
             if (!movieId) return null;
-            return await getStreams('movies', movieId, hash, expires);
+            return await getStreams(base, 'movies', movieId, hash, expires, clientIP);
         }
 
     } catch {
