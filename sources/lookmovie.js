@@ -14,26 +14,25 @@ async function searchLookMovie(type, title, year, clientIP) {
         try {
             const headers = {
                 ...VERIFY_HEADERS,
-                'Accept': 'application/json, text/plain, */*',
+                'Accept': 'application/json',
                 'Referer': `${base}/`,
-                'Origin': base,
                 'X-Requested-With': 'XMLHttpRequest'
             };
             if (clientIP) headers['X-Forwarded-For'] = clientIP;
 
             const res = await fetch(
                 `${base}/api/v1/${endpoint}/do-search/?q=${encodeURIComponent(title)}`,
-                { headers, signal: AbortSignal.timeout(5000) }
+                { headers, signal: AbortSignal.timeout(4000) }
             );
             if (!res.ok) continue;
             const data = await res.json();
             const results = data?.result;
             if (!results?.length) continue;
 
-            let exact = results.find(r => String(r.year) === String(year));
-            if (!exact) exact = results.find(r => r.title?.toLowerCase() === title.toLowerCase());
+            const match = results.find(r => String(r.year) === String(year)) ??
+                results.find(r => r.title?.toLowerCase() === title.toLowerCase()) ??
+                results[0];
 
-            const match = exact ?? results[0];
             if (match) return { match, base };
         } catch { }
     }
@@ -121,34 +120,47 @@ async function getMovieId(html) {
     return match ? match[1] : null;
 }
 
-async function getStreams(base, type, id, hash, expires, clientIP) {
+export async function getStream(id, s = null, e = null, clientIP = null, effectiveBase = '') {
     try {
-        const endpoint = type === 'shows'
-            ? `episode-access?id_episode=${id}`
-            : `movie-access?id_movie=${id}`;
+        const tmdbKey = process.env.TMDB_API_KEY;
+        if (!tmdbKey) return null;
 
-        const headers = {
-            ...VERIFY_HEADERS,
-            'Accept': 'application/json, text/plain, */*',
-            'Referer': `${base}/`,
-            'X-Requested-With': 'XMLHttpRequest',
-        };
-        if (clientIP) headers['X-Forwarded-For'] = clientIP;
+        const isTV = s != null && e != null;
+        const typeStr = isTV ? 'shows' : 'movies';
 
-        const res = await fetch(
-            `${base}/api/v1/security/${endpoint}&hash=${hash}&expires=${expires}`,
-            { headers, signal: AbortSignal.timeout(8000) }
+        const tmdbRes = await fetch(
+            isTV
+                ? `${TMDB_BASE}/tv/${id}?api_key=${tmdbKey}`
+                : `${TMDB_BASE}/movie/${id}?api_key=${tmdbKey}`,
+            { signal: AbortSignal.timeout(3000) }
         );
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data?.success && !data?.streams) return null;
-        const streams = data?.streams || data;
-        if (!streams) return null;
-        const allUrls = Object.entries(streams)
-            .filter(([k, v]) => v && typeof v === 'string' && v.startsWith('http') && !k.toLowerCase().includes('auto'))
-            .map(([, v]) => ({ url: v, skipHlsCheck: true }));
-        if (!allUrls.length) return null;
-        return { allUrls };
+        if (!tmdbRes.ok) return null;
+        const tmdbData = await tmdbRes.json();
+        const title = tmdbData?.title || tmdbData?.name;
+        const year = (tmdbData?.first_air_date || tmdbData?.release_date || '').slice(0, 4);
+        if (!title) return null;
+
+        const searchRes = await searchLookMovie(typeStr, title, year, clientIP);
+        if (!searchRes) return null;
+        const { match, base } = searchRes;
+
+        const slug = match.slug;
+        if (!slug) return null;
+
+        const pageData = await getPlayPageData(base, slug, typeStr, clientIP);
+        if (!pageData) return null;
+        const { html, hash, expires } = pageData;
+
+        let streamId = null;
+        if (isTV) {
+            streamId = await getEpisodeId(html, s, e);
+        } else {
+            streamId = match.id_movie || match.id || await getMovieId(html);
+        }
+
+        if (!streamId) return null;
+        return await getStreams(base, typeStr, streamId, hash, expires, clientIP);
+
     } catch {
         return null;
     }

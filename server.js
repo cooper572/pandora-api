@@ -284,7 +284,7 @@ async function verifyStream(rawUrl, sourceKey) {
 async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, skipProxyCheck = false) {
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const timeout = setTimeout(() => controller.abort(), 6000);
 
         const m3u8Res = await fetch(proxiedUrl, {
             signal: controller.signal,
@@ -294,7 +294,8 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
 
         if (!m3u8Res.ok) return { ok: false, error: `m3u8 fetch failed: ${m3u8Res.status}` };
         const text = await m3u8Res.text();
-        if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence')) {
+
+        if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence') || text.includes('429')) {
             return { ok: false, error: 'Proxy Blocked or Invalid Hash' };
         }
         if (!text.trim().startsWith('#EXTM3U')) return { ok: false, error: 'response is not a valid m3u8' };
