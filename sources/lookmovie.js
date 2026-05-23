@@ -31,22 +31,6 @@ async function searchMatch(type, title, tmdbId) {
     return null;
 }
 
-async function getShowSlug(title, year) {
-    const res = await fetch(
-        `${LM_BASE}/api/v1/shows/do-search/?q=${encodeURIComponent(title)}`,
-        { headers: HEADERS, signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const results = data?.result;
-    if (!results?.length) return null;
-    const match = results.find(r =>
-        String(r.year) === String(year) ||
-        r.title.toLowerCase() === title.toLowerCase()
-    );
-    return match?.slug || results[0]?.slug;
-}
-
 async function getHashAndExpires(slug) {
     const res = await fetch(
         `${LM_BASE}/shows/play/${slug}`,
@@ -83,13 +67,10 @@ export async function getStream(id, s = null, e = null, clientIP = null, effecti
         if (!tmdbRes.ok) return null;
         const tmdbData = await tmdbRes.json();
         const title = tmdbData?.title || tmdbData?.name;
-        const year = (tmdbData?.first_air_date || tmdbData?.release_date || '').slice(0, 4);
         if (!title) return null;
 
         const match = await searchMatch(isTV ? 'shows' : 'movies', title, id);
         if (!match) return null;
-
-        let streamId = null;
 
         if (isTV) {
             const showId = match.id_show ?? match.id;
@@ -104,13 +85,11 @@ export async function getStream(id, s = null, e = null, clientIP = null, effecti
                 Number(ep.season) === Number(s) && Number(ep.episode) === Number(e)
             );
             if (!ep) return null;
-            streamId = ep.id_episode ?? ep.id;
+            const streamId = ep.id_episode ?? ep.id;
 
-            const slug = match.slug ?? match.id_show ?? match.id;
-            const slugRes = await getShowSlug(title, year);
-            if (!slugRes) return null;
-
-            const tokens = await getHashAndExpires(slugRes);
+            const slug = match.slug;
+            if (!slug) return null;
+            const tokens = await getHashAndExpires(slug);
             if (!tokens) return null;
 
             const accessRes = await fetch(
@@ -131,15 +110,14 @@ export async function getStream(id, s = null, e = null, clientIP = null, effecti
             if (!streams) return null;
 
             const allUrls = Object.entries(streams)
-                .filter(([k, v]) => v && typeof v === 'string' && v.startsWith('http'))
+                .filter(([, v]) => v && typeof v === 'string' && v.startsWith('http'))
                 .map(([, v]) => v);
             if (!allUrls.length) return null;
 
             return { allUrls };
 
         } else {
-            streamId = match.id_movie ?? match.id;
-
+            const streamId = match.id_movie ?? match.id;
             const viewRes = await fetch(
                 `${BASE}/v1/movies/view?expand=streams&id=${streamId}`,
                 { headers: HEADERS, signal: AbortSignal.timeout(10000) }
