@@ -13,13 +13,21 @@ const UA_LIST = [
 
 const getUA = () => UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
 
+const subtitleCache = new Map();
+const SUBTITLE_TTL = 15 * 60 * 1000;
+
 export async function fetchSubtitles(paths = []) {
+    const cacheKey = paths.map(p => `${p.base}${p.path}`).join('|');
+    const hit = subtitleCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < SUBTITLE_TTL) return hit.val;
+
     try {
         const results = await Promise.all(
             paths.map(async ({ base, path }) => {
                 try {
                     const res = await fetch(`${base}${path}`, {
-                        headers: { 'User-Agent': getUA() }
+                        headers: { 'User-Agent': getUA() },
+                        signal: AbortSignal.timeout(5000),
                     });
 
                     if (!res.ok) {
@@ -70,7 +78,9 @@ export async function fetchSubtitles(paths = []) {
             })
         );
 
-        return results.flat();
+        const val = results.flat();
+        if (val.length) subtitleCache.set(cacheKey, { val, ts: Date.now() });
+        return val;
     } catch {
         return [];
     }

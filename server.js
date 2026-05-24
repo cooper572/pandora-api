@@ -19,6 +19,14 @@ globalThis.fetch = async (url, opts) => {
 import dotenv from 'dotenv';
 dotenv.config();
 
+const hlsVerifyCache = new Map();
+const metaCache = new Map();
+const sourceResultCache = new Map();
+
+const META_TTL = 30 * 60 * 1000;
+const HLS_TTL = 3 * 60 * 1000;
+const SOURCE_RESULT_TTL = 4 * 60 * 1000;
+
 import http from 'http';
 import { SOURCES, SOURCE_MAP, CACHE_TTL } from './config.js';
 
@@ -291,9 +299,13 @@ async function verifyStream(rawUrl, sourceKey) {
 }
 
 async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, skipProxyCheck = false) {
+    const cacheKey = proxiedUrl;
+    const hit = hlsVerifyCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < HLS_TTL) return hit.val;
+
     try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
+        const timeout = setTimeout(() => controller.abort(), 15000);
 
         const m3u8Res = await fetch(proxiedUrl, {
             signal: controller.signal,
@@ -301,20 +313,28 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
         });
         clearTimeout(timeout);
 
-        if (!m3u8Res.ok) return { ok: false, error: `m3u8 fetch failed: ${m3u8Res.status}` };
+        if (!m3u8Res.ok) {
+            const val = { ok: false, error: `m3u8 fetch failed: ${m3u8Res.status}` };
+            if (m3u8Res.status !== 429) hlsVerifyCache.set(cacheKey, { val, ts: Date.now() });
+            return val;
+        }
         const text = await m3u8Res.text();
 
         if (text.includes('WRONG HASH') || text.includes('democratize artificial intelligence') || text.includes('429') || text.includes('Cloudflare') || (!text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF'))) {
             return { ok: false, error: 'Proxy Blocked or Invalid Hash' };
         }
 
-        if (!text.trim().startsWith('#EXTM3U')) return { ok: false, error: 'response is not a valid m3u8' };
+        if (!text.trim().startsWith('#EXTM3U')) {
+            return { ok: false, error: 'response is not a valid m3u8' };
+        }
 
         const lines = text.split('\n').map(l => l.trim());
         const hasSegments = lines.some(l => l && !l.startsWith('#'));
         const hasVariants = text.includes('#EXT-X-STREAM-INF');
 
-        if (!hasSegments && !hasVariants) return { ok: false, error: 'empty playlist' };
+        if (!hasSegments && !hasVariants) {
+            return { ok: false, error: 'empty playlist' };
+        }
 
         if (!skipProxyCheck) {
             let nextUrl = lines.find(l => l && !l.startsWith('#'));
@@ -322,7 +342,7 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
                 if (!nextUrl.startsWith('http')) nextUrl = new URL(nextUrl, proxiedUrl).href;
 
                 const nextCtrl = new AbortController();
-                const nextTimeout = setTimeout(() => nextCtrl.abort(), 8000);
+                const nextTimeout = setTimeout(() => nextCtrl.abort(), 12000);
                 const nextRes = await fetch(nextUrl, {
                     method: 'GET',
                     headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': 'bytes=0-1024' },
@@ -342,7 +362,7 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
                     if (segUrl) {
                         if (!segUrl.startsWith('http')) segUrl = new URL(segUrl, nextUrl).href;
                         const segCtrl = new AbortController();
-                        const segTimeout = setTimeout(() => segCtrl.abort(), 8000);
+                        const segTimeout = setTimeout(() => segCtrl.abort(), 12000);
                         const segRes = await fetch(segUrl, {
                             method: 'GET',
                             headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': 'bytes=0-1024' },
@@ -357,13 +377,19 @@ async function verifyHlsPlayable(proxiedUrl, absoluteBase, extraHeaders = {}, sk
             }
         }
 
-        return { ok: true, error: null };
+        const val = { ok: true, error: null };
+        hlsVerifyCache.set(cacheKey, { val, ts: Date.now() });
+        return val;
     } catch (err) {
         return { ok: false, error: err.message };
     }
 }
 
 async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = '') {
+    const requestCacheKey = `sources-${id}-${s || ''}-${e || ''}-${absoluteBase}`;
+    const hit = sourceResultCache.get(requestCacheKey);
+    if (hit && Date.now() - hit.ts < SOURCE_RESULT_TTL) return hit.val;
+
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
     const fallbackBase = isFallbackNeeded(absoluteBase.replace('https://', '').replace('http://', '')) ? FALLBACK_BASE : '';
 
@@ -410,10 +436,18 @@ async function getAllWorkingSources(id, s, e, clientIP = null, absoluteBase = ''
         new Promise(resolve => setTimeout(resolve, 12000))
     ]);
 
+    if (results.length > 0) {
+        sourceResultCache.set(requestCacheKey, { val: results, ts: Date.now() });
+    }
+
     return results;
 }
 
 async function getMetadata(id, s, e) {
+    const cacheKey = `${id}-${s || ''}-${e || ''}`;
+    const hit = metaCache.get(cacheKey);
+    if (hit && Date.now() - hit.ts < META_TTL) return hit.val;
+
     try {
         const k = process.env.TMDB_API_KEY;
         if (!k || k === 'demo_key_12345ab45d9e64e67088f910f93') {
@@ -432,7 +466,9 @@ async function getMetadata(id, s, e) {
             res.body?.cancel();
             return { error: `TMDB API error: ${res.status}` };
         }
-        return await res.json();
+        const val = await res.json();
+        metaCache.set(cacheKey, { val, ts: Date.now() });
+        return val;
     } catch (error) {
         return { error: 'Metadata fetch failed', details: error.message };
     }
