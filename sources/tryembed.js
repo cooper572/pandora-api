@@ -216,14 +216,14 @@ function extractUrls(data) {
     const urls = [];
     const providers = data?.providers || [];
     for (const provider of providers) {
-        const qualities = provider.qualities || [];
-        for (const q of qualities) {
+        for (const q of provider.qualities || []) {
             if (q.token) urls.push(`https://tryembed.us.cc/s/${q.token}.m3u8`);
             if (q.fallbackToken) urls.push(`https://tryembed.us.cc/s/${q.fallbackToken}.m3u8`);
         }
     }
     return urls;
 }
+
 
 const animeInfoCache = new Map();
 
@@ -268,14 +268,34 @@ export async function getStream(tmdbId, season, episode, _clientIP, _base, audio
     const refHeaders = {
         'Referer': 'https://tryembed.us.cc/',
         'Origin': 'https://tryembed.us.cc',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0',
     };
 
-    const allUrls = await Promise.all(
+    const allUrls = (await Promise.all(
         rawUrls.map(async (url) => {
-            const resolved = await resolveRedirect(url, refHeaders);
-            return { url: resolved, headers: {} };
+            try {
+                const res = await fetch(url, {
+                    headers: refHeaders,
+                    redirect: 'manual',
+                    signal: AbortSignal.timeout(10000),
+                });
+                res.body?.cancel();
+                const location = res.headers.get('location');
+                const resolved = (location && res.status >= 301 && res.status <= 308)
+                    ? new URL(location, url).href
+                    : url;
+                return {
+                    url: resolved,
+                    headers: refHeaders,
+                    skipProxy: false,
+                };
+            } catch {
+                return null;
+            }
         })
-    );
+    )).filter(Boolean);
+
+    if (!allUrls.length) return null;
 
     return { allUrls, skipProxy: false };
 }
