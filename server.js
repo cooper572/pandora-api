@@ -883,7 +883,8 @@ async function handleRequest(req) {
                         const isM3u8 = text.trim().startsWith('#EXTM3U') || text.trim().startsWith('#EXT-X-') || /megacloud\.animanga\.fun\/(ts-proxy|proxy)/i.test(text.slice(0, 200));
                         if (isM3u8) {
                             const absoluteBase = getAbsoluteBase(reqUrl.host);
-                            const rewritten = rewriteM3u8(text, rawUrl, '&vn=1', absoluteBase);
+                            const encodedHeaders = encodeURIComponent(JSON.stringify(extraHeaders));
+                            const rewritten = rewriteM3u8(text, cleanUrl, `&${cfg.proxyParam}=1&proxyHeaders=${encodedHeaders}`, absoluteBase);
                             return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...corsHeaders } };
                         }
                         return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
@@ -945,7 +946,7 @@ async function handleRequest(req) {
                     }
                     return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                 }
-                
+
                 if (q.tt) {
                     const buf = await upstream.arrayBuffer();
                     const full = new Uint8Array(buf);
