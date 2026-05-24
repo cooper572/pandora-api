@@ -193,7 +193,7 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
 function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = '', fallbackBase = '') {
     const mod = SOURCE_MODULES[cfg.key];
     const effectiveBase = getEffectiveBase(absoluteBase);
-    const audio = cfg.key === 'tryembed-dub' ? 'dub' : 'sub';
+    const audio = (cfg.key === 'tryembed-dub' || cfg.key === 'vidnest-dub') ? 'dub' : 'sub';
 
     if (cfg.multiBase) {
         return withTimeout(
@@ -490,7 +490,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     }
 
     const mod = SOURCE_MODULES[sourceKey];
-    const audio = sourceKey === 'tryembed-dub' ? 'dub' : 'sub';
+    const audio = (cfg.key === 'tryembed-dub' || cfg.key === 'vidnest-dub') ? 'dub' : 'sub';
 
     let rawResult = null;
     let fetchError = null;
@@ -748,6 +748,7 @@ async function handleRequest(req) {
         const e = q.episode || q.e || null;
         const sourceKey = q.source || 'vidrock';
         const mod = SOURCE_MODULES[sourceKey];
+        const cfg = SOURCE_MAP[sourceKey];
         if (!mod) return { status: 400, body: JSON.stringify({ error: `unknown source: ${sourceKey}` }), headers: { 'Content-Type': 'application/json', ...corsHeaders } };
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         const t0 = Date.now();
@@ -780,7 +781,8 @@ async function handleRequest(req) {
 
             try {
                 const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
-                const audio = sourceKey === 'tryembed-dub' ? 'dub' : 'sub';
+                const audio = (cfg.key === 'tryembed-dub' || cfg.key === 'vidnest-dub') ? 'dub' : 'sub';
+
                 streamResult = await mod.getStream(id, s, e, null, absoluteBase, audio) ?? await mod.getStream(id, s, e, null, fallbackBase, audio);
             } catch (err) {
                 streamError = err.message;
@@ -891,7 +893,9 @@ async function handleRequest(req) {
                     }
                     const isTikTok = /tiktokcdn\.com|ibyteimg\.com/i.test(cleanUrl);
                     const isMkv = cleanUrl.includes('.mkv') || ct.includes('matroska') || ct.includes('x-matroska');
-                    const isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl);
+
+                    const isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl) || /letsgocdn\d+\.shop/i.test(cleanUrl);
+
                     if (isTikTok || isPngMasked) {
                         if (!upstream.ok) {
                             return { status: upstream.status, body: `upstream ${upstream.status} for ${rawUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
@@ -901,7 +905,8 @@ async function handleRequest(req) {
                         const stripped = full[0] === 0x89 || full[0] === 0xFF ? full.slice(120) : full;
                         return { status: 200, body: Buffer.from(stripped), headers: { 'Content-Type': 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
                     }
-                    const needsStrip = q.tt || /seg\.html|enproxy/i.test(cleanUrl);
+                    const needsStrip = q.tt || /seg\.html|enproxy|letsgocdn\d+\.shop/i.test(cleanUrl);
+
                     if (needsStrip) {
                         if (!upstream.ok) {
                             return { status: upstream.status, body: `upstream ${upstream.status} for ${cleanUrl.slice(0, 200)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };

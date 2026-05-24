@@ -12,6 +12,25 @@ const REQUEST_HEADERS = {
     'Origin': BASE_URL,
 };
 
+export const CDN_HEADERS = [
+    {
+        pattern: /letsgocdn\d+\.shop/i,
+        headers: {
+            'Referer': 'https://vidnest.fun/',
+            'Origin': 'https://vidnest.fun',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36',
+        },
+    },
+    {
+        pattern: /cdn\.mewstream\.buzz/i,
+        headers: {
+            'Referer': 'https://vidnest.fun/',
+            'Origin': 'https://vidnest.fun',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36',
+        },
+    },
+];
+
 const CDN_PROXY_HEADERS = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0',
     'accept': '*/*',
@@ -135,33 +154,59 @@ async function tmdbToAnilist(tmdbId, season, info) {
     return bestId;
 }
 
+const SERVERS = ['hollymoviehd', 'allmovies', 'catflix', 'purstream', 'lamda', 'vidlink', 'klikxxi'];
+
 export async function getStream(tmdbId, season, episode, _clientIP, _base, audio = 'sub') {
-    if (!season) return null;
-
-    const info = await getAnimeInfo(tmdbId, season);
-    if (!info.isAnime) return null;
-
-    const anilistId = await tmdbToAnilist(tmdbId, season, info);
-    if (!anilistId) return null;
-
     const ep = episode ? parseInt(episode, 10) : 1;
     const audioParam = audio === 'dub' ? 'dub' : 'sub';
-    const apiUrl = `${API_BASE_URL}/hianime/anime/${anilistId}/${ep}/${audioParam}`;
 
-    try {
-        const res = await fetch(apiUrl, { headers: REQUEST_HEADERS, signal: AbortSignal.timeout(15000) });
-        if (!res.ok) { res.body?.cancel(); return null; }
-        const json = await res.json();
-        if (!json.data) return null;
-        const data = json.encrypted ? decrypt(json.data) : json.data;
-        const file = data.sources?.[0]?.file;
-        if (!file) return null;
-
-        const proxiedUrl = `https://megacloud.animanga.fun/proxy?url=${encodeURIComponent(file)}&headers=${encodeURIComponent(JSON.stringify(CDN_PROXY_HEADERS))}`;
-        return { url: proxiedUrl, headers: REQUEST_HEADERS };
-    } catch {
-        return null;
+    if (season) {
+        const info = await getAnimeInfo(tmdbId, season);
+        if (info.isAnime) {
+            const anilistId = await tmdbToAnilist(tmdbId, season, info);
+            if (anilistId) {
+                try {
+                    const apiUrl = `${API_BASE_URL}/hianime/anime/${anilistId}/${ep}/${audioParam}`;
+                    const res = await fetch(apiUrl, { headers: REQUEST_HEADERS, signal: AbortSignal.timeout(15000) });
+                    if (res.ok) {
+                        const json = await res.json();
+                        const data = json.encrypted ? decrypt(json.data) : json.data;
+                        const file = data?.sources?.[0]?.file;
+                        if (file) {
+                            const proxiedUrl = `https://megacloud.animanga.fun/proxy?url=${encodeURIComponent(file)}&headers=${encodeURIComponent(JSON.stringify(CDN_PROXY_HEADERS))}`;
+                            return { url: proxiedUrl, headers: REQUEST_HEADERS };
+                        }
+                    } else res.body?.cancel();
+                } catch { }
+            }
+        }
     }
+
+    if (audio === 'dub') return null;
+
+    const segment = season ? `tv/${tmdbId}/${season}/${ep}` : `movie/${tmdbId}`;
+
+    const results = await Promise.allSettled(
+        SERVERS.map(async (server) => {
+            const url = `${API_BASE_URL}/${server}/${segment}`;
+            const res = await fetch(url, { headers: REQUEST_HEADERS, signal: AbortSignal.timeout(10000) });
+            if (!res.ok) { res.body?.cancel(); throw new Error(`${server}: ${res.status}`); }
+            const json = await res.json();
+            if (!json.data) throw new Error(`${server}: no data`);
+            const data = json.encrypted ? decrypt(json.data) : json.data;
+            const file = data?.sources?.[0]?.file
+                ?? data?.streams?.[0]?.url
+                ?? data?.url?.[0]?.link
+                ?? data?.data?.stream?.playlist;
+            if (!file) throw new Error(`${server}: no file`);
+            return file;
+        })
+    );
+
+    const file = results.find(r => r.status === 'fulfilled')?.value;
+    if (!file) return null;
+
+    return { url: file, headers: REQUEST_HEADERS, skipProxy: false };
 }
 
 export const VERIFY_HEADERS = { ...REQUEST_HEADERS };

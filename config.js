@@ -13,6 +13,8 @@ export const SOURCES = [
     { key: '02movie', sourceFile: '02movie', label: '02Movie', proxyParam: 'zm', timeout: 35000, jitter: 600, retries: 1 },
     { key: 'moviebox', sourceFile: 'moviebox', label: 'MovieBox', proxyParam: 'mb', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 10000, disabled: true },
     { key: 'vidnest', label: 'VidNest', sourceFile: 'vidnest', proxyParam: 'vdn', timeout: 20000, retries: 1, jitter: 0 },
+    { key: 'vidnest-sub', label: 'VidNest (Sub)', sourceFile: 'vidnest', proxyParam: 'vdn', timeout: 20000, retries: 1, jitter: 0 },
+    { key: 'vidnest-dub', label: 'VidNest (Dub)', sourceFile: 'vidnest', proxyParam: 'vdn', timeout: 20000, retries: 1, jitter: 0 },
     { key: 'popr', sourceFile: 'popr', label: 'Popr', proxyParam: 'pp', timeout: 20000, jitter: 600, retries: 2 },
     { key: 'cinezo', sourceFile: 'cinezo', label: 'Cinezo', proxyParam: 'cz', timeout: 60000, jitter: 500, retries: 2 },
     { key: 'vidfun', sourceFile: 'vidfun', label: 'VidFun', proxyParam: 'vf', timeout: 20000, jitter: 500, retries: 2 },
