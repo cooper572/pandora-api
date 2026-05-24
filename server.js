@@ -373,66 +373,71 @@ async function getMetadata(id, s, e) {
     }, metaCache);
 }
 
+const testResultCache = new LRUCache(200, 60000);
+
 async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     const start = Date.now();
     const cfg = SOURCE_MAP[sourceKey];
     const absoluteBase = getAbsoluteBase(host);
     const mod = SOURCE_MODULES[sourceKey];
 
-    const ok = (url, raw_url, debug) => ({
+    const respond = (ok, url, raw_url, error, debug) => ({
         status: 200,
-        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: true, url, raw_url, elapsed_ms: Date.now() - start, error: null, debug }, null, 2),
-        contentType: 'application/json',
-    });
-    const fail = (error, raw_url = null, debug) => ({
-        status: 200,
-        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok: false, url: null, raw_url, elapsed_ms: Date.now() - start, error, debug }, null, 2),
+        body: JSON.stringify({ source: sourceKey, id, s: s || null, e: e || null, ok, url: ok ? url : null, raw_url, elapsed_ms: Date.now() - start, error: ok ? null : error, debug }, null, 2),
         contentType: 'application/json',
     });
 
-    if (cfg?.disabled) return fail('source disabled');
+    if (cfg?.disabled) return respond(false, null, null, 'source disabled');
 
-    let rawResult = null, fetchError = null;
-    try {
-        const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-        rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
-        if (!rawResult) rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 30000);
-        if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
-    } catch (err) { fetchError = err.message; }
+    const cacheKey = `test-${sourceKey}-${id}-${s || ''}-${e || ''}`;
 
-    const candidates = (mod.MULTI_URL && rawResult?.allUrls?.length)
-        ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
-        : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
-            : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
+    const result = await getCached(cacheKey, async () => {
+        let rawResult = null, fetchError = null;
+        try {
+            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+            rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
+            if (!rawResult) rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 30000);
+            if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
+        } catch (err) { fetchError = err.message; }
 
-    for (const candidate of candidates) {
-        if (mod.SKIP_VERIFY || mod.MULTI_URL) {
-            const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
-            if (!wrappedUrl) continue;
-            if (candidate?.skipProxy || candidate?.skipHlsCheck) return ok(wrappedUrl, candidate.url);
-            const hlsCheck = await verifyHlsPlayable(wrappedUrl, {}, !!candidate.skipProxy);
-            if (hlsCheck.ok || /429|timeout|aborted/.test(hlsCheck.error)) return ok(wrappedUrl, candidate.url);
-            try {
-                const headRes = await _originalFetch(wrappedUrl, { method: 'HEAD', headers: { 'User-Agent': getUA() }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
-                headRes.body?.cancel();
-                const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-                if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) return ok(wrappedUrl, candidate.url);
-            } catch { }
-        } else {
-            if (!(await verifyStream(candidate.url, sourceKey))) continue;
-            const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
-            if (!wrappedUrl) continue;
-            const hlsCheck = await verifyHlsPlayable(wrappedUrl);
-            if (!hlsCheck.ok) {
-                const rawHeaders = candidate?.headers || {};
-                const proxiedBody = await _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message);
-                const rawCheck = await verifyHlsPlayable(candidate.url, rawHeaders);
-                return fail(hlsCheck.error, candidate.url, { proxy_failed: true, proxy_error: hlsCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl });
+        const candidates = (mod.MULTI_URL && rawResult?.allUrls?.length)
+            ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
+            : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
+                : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
+
+        for (const candidate of candidates) {
+            if (mod.SKIP_VERIFY || mod.MULTI_URL) {
+                const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
+                if (!wrappedUrl) continue;
+                if (candidate?.skipProxy || candidate?.skipHlsCheck) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                const hlsCheck = await verifyHlsPlayable(wrappedUrl, {}, !!candidate.skipProxy);
+                if (hlsCheck.ok || /429|timeout|aborted/.test(hlsCheck.error)) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                try {
+                    const headRes = await _originalFetch(wrappedUrl, { method: 'HEAD', headers: { 'User-Agent': getUA() }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
+                    headRes.body?.cancel();
+                    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+                    if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                } catch { }
+            } else {
+                if (!(await verifyStream(candidate.url, sourceKey))) continue;
+                const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
+                if (!wrappedUrl) continue;
+                const hlsCheck = await verifyHlsPlayable(wrappedUrl);
+                if (!hlsCheck.ok) {
+                    const rawHeaders = candidate?.headers || {};
+                    const [proxiedBody, rawCheck] = await Promise.all([
+                        _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
+                        verifyHlsPlayable(candidate.url, rawHeaders),
+                    ]);
+                    return { ok: false, error: hlsCheck.error, raw_url: candidate.url, debug: { proxy_failed: true, proxy_error: hlsCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl } };
+                }
+                return { ok: true, url: wrappedUrl, raw_url: candidate.url };
             }
-            return ok(wrappedUrl, candidate.url);
         }
-    }
-    return fail(fetchError, candidates[0]?.url || null);
+        return { ok: false, error: fetchError, raw_url: candidates[0]?.url || null };
+    }, testResultCache);
+
+    return respond(result.ok, result.url, result.raw_url, result.error, result.debug);
 }
 
 const CORS_HEADERS = {
@@ -566,11 +571,12 @@ async function handleRequest(req) {
         const candidates = streamResult?.allUrls || (streamResult ? [streamResult] : []);
         const checks = await Promise.all(candidates.slice(0, 3).map(async (raw, i) => {
             const rawUrl = typeof raw === 'object' ? raw.url : raw;
+            const rawHeaders = (typeof raw === 'object' && raw.headers) ? raw.headers : {};
             let m3u8Preview = null, hlsCheck = null;
             try {
-                const r = await _originalFetch(rawUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } });
+                const r = await _originalFetch(rawUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA(), ...rawHeaders } });
                 m3u8Preview = (await r.text()).slice(0, 400);
-                hlsCheck = await verifyHlsPlayable(rawUrl, {}, !!(typeof raw === 'object' && raw?.skipProxy));
+                hlsCheck = await verifyHlsPlayable(rawUrl, rawHeaders, !!(typeof raw === 'object' && raw?.skipProxy));
             } catch (err) { hlsCheck = { ok: false, error: err.message }; }
             return { index: i, raw_url: rawUrl, proxy_url: rawUrl, hls_check: hlsCheck, m3u8_preview: m3u8Preview };
         }));
