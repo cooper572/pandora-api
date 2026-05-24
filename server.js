@@ -185,6 +185,7 @@ function rewriteM3u8(body, url, extraParam = '', absoluteBase = '') {
 function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = '', fallbackBase = '') {
     const mod = SOURCE_MODULES[cfg.key];
     const effectiveBase = getEffectiveBase(absoluteBase);
+    const audio = cfg.key === 'tryembed-dub' ? 'dub' : 'sub';
 
     if (cfg.multiBase) {
         return withTimeout(
@@ -194,7 +195,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
                     const result = await getCached(
                         key,
                         () => withRetry(
-                            () => mod.getStream(id, s, e, base, clientIP),
+                            () => mod.getStream(id, s, e, base, clientIP, audio),
                             cfg.retries,
                             500
                         )
@@ -216,7 +217,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
                 getCached(
                     `${cfg.key}-${cacheKey}`,
                     () => withRetry(
-                        () => mod.getStream(id, s, e, clientIP, effectiveBase),
+                        () => mod.getStream(id, s, e, clientIP, effectiveBase, audio),
                         cfg.retries,
                         1000
                     )
@@ -229,7 +230,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP = null, absoluteBase = ''
                     getCached(
                         `${cfg.key}-fallback-${cacheKey}`,
                         () => withRetry(
-                            () => mod.getStream(id, s, e, clientIP, fallbackBase),
+                            () => mod.getStream(id, s, e, clientIP, fallbackBase, audio),
                             cfg.retries,
                             1000
                         )
@@ -412,9 +413,9 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
     }
 
     const mod = SOURCE_MODULES[sourceKey];
+    const audio = sourceKey === 'tryembed-dub' ? 'dub' : 'sub';
 
-    let rawResult = await withTimeout(mod.getStream(id, s, e, null, effectiveBase), 10000);
-
+    let rawResult = null;
     let fetchError = null;
     try {
         const fallbackBase = isFallbackNeeded(host) ? FALLBACK_BASE : '';
@@ -422,10 +423,10 @@ async function handleTestSource(sourceKey, id, s, e, clientIP = null, host = nul
             rawResult = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
         }
         if (!rawResult) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, null, effectiveBase), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, effectiveBase, audio), 30000);
         }
         if (!rawResult && isFallbackNeeded(host)) {
-            rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE), 30000);
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
         }
     } catch (err) {
         fetchError = err.message;
@@ -702,7 +703,8 @@ async function handleRequest(req) {
 
             try {
                 const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
-                streamResult = await mod.getStream(id, s, e, null, absoluteBase) ?? await mod.getStream(id, s, e, null, fallbackBase);
+                const audio = sourceKey === 'tryembed-dub' ? 'dub' : 'sub';
+                streamResult = await mod.getStream(id, s, e, null, absoluteBase, audio) ?? await mod.getStream(id, s, e, null, fallbackBase, audio);
             } catch (err) {
                 streamError = err.message;
             } finally {
