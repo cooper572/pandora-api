@@ -3,26 +3,13 @@ export const MULTI_URL = true;
 
 async function tmdbToAnilist(tmdbId, mediaType, season) {
     try {
-        const type = mediaType === 'tv' ? 'tv' : 'movie';
-        const res = await fetch(`https://api.ani.zip/mappings?tmdb_id=${tmdbId}&type=${type}`, {
+        const type = mediaType === 'movie' ? 'movie' : 'tv';
+        const res = await fetch(`https://api.ani.zip/mappings?tmdb_id=${tmdbId}&type=${type}&season=${season || 1}`, {
             signal: AbortSignal.timeout(6000),
         });
         if (res.ok) {
             const data = await res.json();
-            const anilistId = data?.mappings?.[0]?.anilist_id ?? data?.anilist_id ?? null;
-            if (anilistId) return anilistId;
-        } else {
-            res.body?.cancel();
-        }
-    } catch { }
-
-    try {
-        const res = await fetch(`https://arm.haglund.dev/api/v2/ids?source=tmdb&id=${tmdbId}&include=anilist`, {
-            signal: AbortSignal.timeout(6000),
-        });
-        if (res.ok) {
-            const data = await res.json();
-            const anilistId = data?.anilist ?? null;
+            const anilistId = data?.mappings?.[0]?.anilist_id ?? null;
             if (anilistId) return anilistId;
         } else {
             res.body?.cancel();
