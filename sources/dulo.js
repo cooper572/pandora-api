@@ -26,15 +26,12 @@ export async function getStream(id, s, e) {
     const valid = streams.filter(s => s?.url);
     if (!valid.length) return null;
 
-    const best = valid[0];
-
     const result = {
-        url: best.url,
-        skipProxy: true,
+        url: valid[0].url,
     };
 
     if (valid.length > 1) {
-        result.allUrls = valid.map(s => ({ url: s.url, skipProxy: true }));
+        result.allUrls = valid.map(s => ({ url: s.url }));
     }
 
     return result;

@@ -1,7 +1,18 @@
-const BASE = 'https://api.dmvdriverseducation.org';
-const MOVSRC_API = BASE;
+const MOVSRC_API = 'https://api.dmvdriverseducation.org';
 
 export const SKIP_VERIFY = true;
+
+function extractFromProxyUrl(proxyUrl) {
+    try {
+        const u = new URL(proxyUrl);
+        const dataParam = u.searchParams.get('data');
+        if (dataParam) {
+            const decoded = JSON.parse(decodeURIComponent(dataParam));
+            return { url: decoded.url, headers: decoded.headers || null };
+        }
+    } catch { }
+    return { url: proxyUrl, headers: null };
+}
 
 function rewriteUrl(rawUrl) {
     if (!rawUrl) return null;
@@ -37,7 +48,7 @@ export async function getStream(id, s, e) {
     const order = ['1080p', '720p', '480p', '360p'];
     let best = null;
     for (const q of order) {
-        best = sources.find(s => s.quality === q);
+        best = sources.find(src => src.quality === q);
         if (best) break;
     }
     if (!best) best = sources[0];
@@ -45,17 +56,19 @@ export async function getStream(id, s, e) {
     const rewritten = rewriteUrl(best.url);
     if (!rewritten) return null;
 
+    const { url: innerUrl, headers: innerHeaders } = extractFromProxyUrl(rewritten);
+
     const result = {
-        url: rewritten,
-        skipProxy: true,
-        headers: best.headers || null,
+        url: innerUrl,
+        headers: innerHeaders,
     };
 
     const allUrls = sources
         .map(src => {
             const rw = rewriteUrl(src.url);
             if (!rw) return null;
-            return { url: rw, skipProxy: true, headers: src.headers || null };
+            const { url: u, headers: h } = extractFromProxyUrl(rw);
+            return { url: u, headers: h };
         })
         .filter(Boolean);
 
