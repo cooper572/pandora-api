@@ -26,6 +26,9 @@ export const SOURCES = [
     { key: 'tryembed-dub', sourceFile: 'tryembed', label: 'TryEmbed (Dub)', proxyParam: 'tedub', timeout: 25000, jitter: 500, retries: 2 },
     { key: 'movsrc', sourceFile: 'movsrc', label: 'MovSrc', proxyParam: 'ms', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'dulo', sourceFile: 'dulo', label: 'Dulo', proxyParam: 'dl', timeout: 20000, jitter: 500, retries: 2 },
+    { key: 'fireflix', sourceFile: 'fireflix', label: 'FireFlix', proxyParam: 'ff', timeout: 30000, jitter: 500, retries: 2 },
+    { key: 'watchott', sourceFile: 'watchott', label: 'WatchOtt', proxyParam: 'wo', timeout: 30000, jitter: 500, retries: 2 },
+    { key: 'flixtrz', sourceFile: 'flixtrz', label: 'FlixTrz', proxyParam: 'fz', timeout: 30000, jitter: 500, retries: 2 },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
