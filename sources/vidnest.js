@@ -158,7 +158,7 @@ export async function getStream(tmdbId, season, episode, _clientIP, _base, audio
         if (!file) return null;
 
         const proxiedUrl = `https://megacloud.animanga.fun/proxy?url=${encodeURIComponent(file)}&headers=${encodeURIComponent(JSON.stringify(CDN_PROXY_HEADERS))}`;
-        return { url: proxiedUrl, headers: REQUEST_HEADERS, skipProxy: true };
+        return { url: proxiedUrl, headers: REQUEST_HEADERS };
     } catch {
         return null;
     }
