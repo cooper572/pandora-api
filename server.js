@@ -1,3 +1,16 @@
+import cluster from 'cluster';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+if (cluster.isPrimary) {
+    cluster.fork();
+    fs.watch(fileURLToPath(import.meta.url), () => {
+        for (const id in cluster.workers) cluster.workers[id].kill();
+    });
+    cluster.on('exit', () => cluster.fork());
+    await new Promise(() => { });
+}
+
 import dotenv from 'dotenv';
 import http from 'http';
 import { SOURCES, SOURCE_MAP, CACHE_TTL } from './config.js';
@@ -465,12 +478,12 @@ const respondJson = (status, data, extraHeaders) => ({
 });
 
 const ROUTE_TESTS = {
-    subtitle_movie: /^\/api\/subtitles\/movie\/([^/]+)$/,
-    subtitle_tv: /^\/api\/subtitles\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
-    debug: /^\/api\/debug\/([^/]+)$/,
-    test: /^\/api\/test\/([^/]+)$/,
-    download_movie: /^\/api\/downloads\/movie\/([^/]+)$/,
-    download_tv: /^\/api\/downloads\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
+    subtitle_movie: /^\/(?:api\/)?subtitles?\/movie\/([^/]+)$/,
+    subtitle_tv: /^\/(?:api\/)?subtitles?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
+    debug: /^\/(?:api\/)?debug\/([^/]+)$/,
+    test: /^\/(?:api\/)?test\/([^/]+)$/,
+    download_movie: /^\/(?:api\/)?downloads?\/movie\/([^/]+)$/,
+    download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
 async function handleRequest(req) {
@@ -483,45 +496,70 @@ async function handleRequest(req) {
 
     if (pathname === '/' || pathname === '') {
         return respondJson(200, {
-            endpoints: { movie: '/api/movie?id=<tmdb_id>', tv: '/api/tv?id=<tmdb_id>&season=<s>&episode=<e>', downloads: { movie: '/api/downloads/movie/<tmdb_id>', tv: '/api/downloads/tv/<tmdb_id>/<season>/<episode>' }, subtitles: { movie: '/api/subtitles/movie/<tmdb_id>', tv: '/api/subtitles/tv/<tmdb_id>/<season>/<episode>' }, health: '/api/health' },
-            tests: { samples: { movie: { stream: '/api/movie?id=155', downloads: '/api/downloads/movie/155', subtitles: '/api/subtitles/movie/155' }, tv: { stream: '/api/tv?id=1396&season=1&episode=1', downloads: '/api/downloads/tv/1396/1/1', subtitles: '/api/subtitles/tv/76479/1/1' } }, bySource: Object.fromEntries(ACTIVE_SOURCES.map(({ key }) => [key, { movie: `/api/test/155?source=${key}`, tv: `/api/test/1396?season=1&episode=1&source=${key}` }])) },
+            routes: {
+                movie: "/movie?id=:id",
+                tv: "/tv?id=:id&season=:s&episode=:e",
+                subtitles: "/subtitles",
+                downloads: "/downloads",
+                test: "/test",
+                health: "/health"
+            }
         });
     }
 
-    if (pathname === '/api/health') {
+    if (pathname === '/test' || pathname === '/api/test') {
+        const tests = {};
+        ACTIVE_SOURCES.forEach(s => {
+            tests[s.key] = {
+                movie: `/api/test/155?source=${s.key}`,
+                tv: `/api/test/1396?season=1&episode=1&source=${s.key}`
+            };
+        });
+        return respondJson(200, tests);
+    }
+
+    if (pathname === '/health' || pathname === '/api/health') {
         const result = await handleHealth(SOURCE_MODULES, mainCache, verifyStream);
-        const parsed = JSON.parse(result.body);
-        umamiTrack('health', { status: parsed.status, cache: parsed.cache });
         return { status: result.status, body: result.body, headers: JSON_CORS };
     }
 
-    if (pathname === '/api/movie') {
+    if (pathname === '/movie' || pathname === '/api/movie') {
         const id = searchParams.get('id');
-        if (!id) return respondJson(400, { error: 'missing id' });
+        if (!id) return respondJson(400, { error: 'missing id', route: "/movie?id=:tmdb_id", example: "/movie?id=155" });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         const [sources, meta, subtitles] = await Promise.all([
             getAllWorkingSources(id, null, null, clientIP, absoluteBase),
             getMetadata(id, null, null),
             fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/movie/${id}` }, { base: SUBTITLE_BASES[1], path: `/movie/${id}` }, { base: SUBTITLE_BASES[2], path: `/movie/tt${id}` }]),
         ]);
-        umamiTrack('movie', { id, sources: sources.length, found: sources.length > 0 });
         return respondJson(200, { sources, subtitles: subtitles || [], meta, noSources: !sources.length });
     }
 
-    if (pathname === '/api/tv') {
-        const id = searchParams.get('id'), season = searchParams.get('season'), episode = searchParams.get('episode');
-        if (!id || !season || !episode) return respondJson(400, { error: 'missing id, season, or episode' });
+    if (pathname === '/tv' || pathname === '/api/tv') {
+        const id = searchParams.get('id'), s = searchParams.get('season'), e = searchParams.get('episode');
+        if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: "/tv?id=:id&season=:s&episode=:e", example: "/tv?id=1396&season=1&episode=1" });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         const [sources, meta, subtitles] = await Promise.all([
-            getAllWorkingSources(id, season, episode, clientIP, absoluteBase),
-            getMetadata(id, season, episode),
-            fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/tv/${id}/${season}/${episode}` }, { base: SUBTITLE_BASES[1], path: `/tv/${id}/${season}/${episode}` }, { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${season}/${episode}` }]),
+            getAllWorkingSources(id, s, e, clientIP, absoluteBase),
+            getMetadata(id, s, e),
+            fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[1], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${s}/${e}` }]),
         ]);
-        umamiTrack('tv', { id, season, episode, sources: sources.length, found: sources.length > 0 });
         return respondJson(200, { sources, subtitles: subtitles || [], meta, noSources: !sources.length });
     }
 
-    if (pathname === '/api/sources') return respondJson(200, ACTIVE_SOURCES.map(c => c.label));
+    if (pathname === '/subtitle' || pathname === '/subtitles' || pathname === '/api/subtitle' || pathname === '/api/subtitles') {
+        return respondJson(200, {
+            routes: { movie: "/subtitles/movie/:id", tv: "/subtitles/tv/:id/:s/:e" },
+            examples: { movie: "/subtitles/movie/155", tv: "/subtitles/tv/1396/1/1" }
+        });
+    }
+
+    if (pathname === '/download' || pathname === '/downloads' || pathname === '/api/download' || pathname === '/api/downloads') {
+        return respondJson(200, {
+            routes: { movie: "/downloads/movie/:id", tv: "/downloads/tv/:id/:s/:e" },
+            examples: { movie: "/downloads/movie/155", tv: "/downloads/tv/1396/1/1" }
+        });
+    }
 
     let match = ROUTE_TESTS.subtitle_movie.exec(pathname);
     if (match) { umamiTrack('subtitles-movie', { id: match[1] }); return handleSubtitleMovie(match[1], CORS_HEADERS); }
