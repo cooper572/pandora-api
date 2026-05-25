@@ -4,9 +4,25 @@ import { fileURLToPath } from 'url';
 
 if (cluster.isPrimary) {
     cluster.fork();
-    fs.watch(fileURLToPath(import.meta.url), () => {
+
+    const toWatch = [
+        fileURLToPath(import.meta.url),
+        './config.js',
+        './routes/subtitles.js',
+        './routes/downloads.js',
+        './routes/health.js',
+    ];
+
+    fs.watch('./sources', { persistent: false }, () => {
         for (const id in cluster.workers) cluster.workers[id].kill();
     });
+
+    toWatch.forEach(f => {
+        fs.watch(f, () => {
+            for (const id in cluster.workers) cluster.workers[id].kill();
+        });
+    });
+
     cluster.on('exit', () => cluster.fork());
     await new Promise(() => { });
 }
