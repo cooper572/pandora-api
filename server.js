@@ -5,6 +5,8 @@ import { fetchSubtitles, handleSubtitleMovie, handleSubtitleTv, SUBTITLE_BASES }
 import { handleDownloadMovie, handleDownloadTv } from './routes/downloads.js';
 import { handleHealth } from './routes/health.js';
 
+import { Readable } from 'stream';
+
 dotenv.config();
 
 const _originalFetch = globalThis.fetch;
@@ -126,7 +128,15 @@ async function withRetry(fn, attempts = 3, delay = 1000) {
     return null;
 }
 
-const withTimeout = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(() => r(null), ms))]);
+const PROXY_PARAM_MAP = new Map(ACTIVE_SOURCES.map(cfg => [cfg.proxyParam, cfg]));
+
+const withTimeout = (promise, ms) => {
+    let t;
+    return Promise.race([
+        promise.then(v => { clearTimeout(t); return v; }),
+        new Promise(r => { t = setTimeout(() => r(null), ms); }),
+    ]);
+};
 
 async function fetchUpstream(url, extraHeaders = {}, timeoutMs = 30000) {
     let current = url.startsWith('http://') ? 'https://' + url.slice(7) : url;
@@ -300,7 +310,6 @@ async function verifyHlsPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck =
 
 async function processSourceCandidate(raw, cfg, absoluteBase, skipVerify) {
     const candidate = typeof raw === 'object' ? raw : { url: raw };
-    const mod = SOURCE_MODULES[cfg.key];
 
     if (skipVerify) {
         const wrapped = wrapUrl(candidate, cfg.key, absoluteBase);
@@ -559,14 +568,25 @@ async function handleRequest(req) {
                 throw err;
             }
         };
+        const debugLock = new Map();
+
         try {
             const audio = /dub$/.test(sourceKey) ? 'dub' : 'sub';
-            const getStreamTraced = (a, b, c, d, base, f) => {
-                const prev = globalThis.fetch;
-                globalThis.fetch = tracingFetch;
-                return mod.getStream(a, b, c, d, base, f).finally(() => { globalThis.fetch = prev; });
-            };
-            streamResult = (await getStreamTraced(id, s, e, null, absoluteBase, audio)) ?? (await getStreamTraced(id, s, e, null, isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '', audio));
+            const lockKey = `${sourceKey}-${id}-${s}-${e}`;
+            while (debugLock.has(lockKey)) await debugLock.get(lockKey);
+            const prev = globalThis.fetch;
+            globalThis.fetch = tracingFetch;
+            const release = new Promise(async resolve => {
+                try {
+                    streamResult = (await mod.getStream(id, s, e, null, absoluteBase, audio)) ??
+                        (await mod.getStream(id, s, e, null, isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '', audio));
+                } catch (err) { streamError = err.message; }
+                globalThis.fetch = prev;
+                resolve();
+            });
+            debugLock.set(lockKey, release);
+            await release;
+            debugLock.delete(lockKey);
         } catch (err) { streamError = err.message; }
         const candidates = streamResult?.allUrls || (streamResult ? [streamResult] : []);
         const checks = await Promise.all(candidates.slice(0, 3).map(async (raw, i) => {
@@ -595,7 +615,11 @@ async function handleRequest(req) {
                 if (!extraHeaders['User-Agent'] && !extraHeaders['user-agent']) extraHeaders['User-Agent'] = getUA();
                 delete extraHeaders['Host'];
 
-                const matchedSource = ACTIVE_SOURCES.find(cfg => searchParams.has(cfg.proxyParam));
+                let matchedSource = null;
+                for (const [param, cfg] of PROXY_PARAM_MAP) {
+                    if (searchParams.has(param)) { matchedSource = cfg; break; }
+                }
+
                 let cleanUrl = url;
 
                 if (matchedSource) {
@@ -724,7 +748,6 @@ http.createServer(async (req, res) => {
         if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
         res.writeHead(result.status, headers);
         if (result.stream) {
-            const { Readable } = await import('stream');
             const readable = Readable.fromWeb(result.stream);
             readable.on('error', () => { try { res.destroy(); } catch { } });
             res.on('error', () => { try { readable.destroy(); } catch { } });
