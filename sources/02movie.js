@@ -9,6 +9,7 @@ const HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'application/json',
     'Referer': `${BASE}/`,
+    ...(process.env.O2MOVIE_TOKEN ? { 'Authorization': `Bearer ${process.env.O2MOVIE_TOKEN}` } : {}),
 };
 
 const KEY_PARTS = ['o2by', 'M0v1e', 'S3cur', 'Ek3y!'];
@@ -32,8 +33,19 @@ async function decrypt(encoded) {
     return JSON.parse(new TextDecoder().decode(plain));
 }
 
-async function fetchDecrypted(path) {
-    const url = `${BASE}${path}`;
+async function fetchToken(id, s, e) {
+    const url = s && e
+        ? `${BASE}/api/tv/download-token?id=${id}&season=${s}&episode=${e}`
+        : `${BASE}/api/movies/download-token?id=${id}`;
+    const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`token fetch HTTP ${res.status}`);
+    const json = await res.json();
+    if (!json.token) throw new Error(`no token in response: ${JSON.stringify(json)}`);
+    return json.token;
+}
+
+async function fetchDecrypted(path, token) {
+    const url = `${BASE}${path}${token ? `&t=${encodeURIComponent(token)}` : ''}`;
     let res;
     try {
         res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
@@ -62,38 +74,50 @@ async function fetchDecrypted(path) {
 }
 
 async function fetchDownloaderServer3(id, s, e) {
-    const tokenRes = await fetch(`${DOWNLOADER_BASE}/api/verify-robot`, {
+    const pagePath = s && e ? `/api/download/tv/${id}/${s}/${e}` : `/api/download/movie/${id}`;
+    const pageUrl = `${DOWNLOADER_BASE}${pagePath}`;
+
+    const pageRes = await fetch(pageUrl, {
+        headers: { 'User-Agent': HEADERS['User-Agent'], 'Accept': 'text/html' },
+        signal: AbortSignal.timeout(10000),
+    });
+    if (!pageRes.ok) throw new Error(`02moviedownloader page HTTP ${pageRes.status}`);
+    const html = await pageRes.text();
+
+    const configMatch = html.match(/const VERIFY_CONFIG\s*=\s*(\{[^;]+\})/);
+    if (!configMatch) throw new Error('02moviedownloader: VERIFY_CONFIG not found in page');
+    const config = JSON.parse(configMatch[1]);
+
+    const { scope, pageNonce, powChallenge, powDifficulty } = config;
+    const powNonce = await solvePoW(powChallenge, powDifficulty ?? 4);
+
+    const verifyRes = await fetch(`${DOWNLOADER_BASE}/api/verify-robot`, {
         method: 'POST',
         headers: {
             'User-Agent': HEADERS['User-Agent'],
-            'Accept': '*/*',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
             'Origin': DOWNLOADER_BASE,
-            'Referer': `${DOWNLOADER_BASE}/api/download/${s && e ? `tv/${id}/${s}/${e}` : `movie/${id}`}`,
+            'Referer': pageUrl,
         },
-        signal: AbortSignal.timeout(10000),
+        body: JSON.stringify({ scope, pageNonce, powChallenge, powNonce }),
+        signal: AbortSignal.timeout(30000),
     });
 
-    if (!tokenRes.ok) {
-        const body = await tokenRes.text().catch(() => '');
-        throw new Error(`02moviedownloader verify-robot HTTP ${tokenRes.status} — ${body.slice(0, 200)}`);
+    if (!verifyRes.ok) {
+        const body = await verifyRes.text().catch(() => '');
+        throw new Error(`02moviedownloader verify-robot HTTP ${verifyRes.status} — ${body.slice(0, 200)}`);
     }
 
-    const tokenJson = await tokenRes.json();
-    if (!tokenJson.success || !tokenJson.token) throw new Error('02moviedownloader verify-robot did not return a token');
+    const { token } = await verifyRes.json();
+    if (!token) throw new Error('02moviedownloader verify-robot did not return a token');
 
-    const token = tokenJson.token;
-
-    const downloadPath = s && e
-        ? `/api/download/tv/${id}/${s}/${e}`
-        : `/api/download/movie/${id}`;
-
-    const dlRes = await fetch(`${DOWNLOADER_BASE}${downloadPath}`, {
-        method: 'GET',
+    const dlRes = await fetch(`${DOWNLOADER_BASE}/api/download${pagePath}`, {
         headers: {
             'User-Agent': HEADERS['User-Agent'],
             'Accept': 'application/json',
             'Origin': DOWNLOADER_BASE,
-            'Referer': `${DOWNLOADER_BASE}${downloadPath}`,
+            'Referer': pageUrl,
             'x-session-token': token,
         },
         signal: AbortSignal.timeout(12000),
@@ -106,19 +130,26 @@ async function fetchDownloaderServer3(id, s, e) {
 
     const dlJson = await dlRes.json();
     if (dlJson.encrypted && typeof dlJson.data === 'string') {
-        try {
-            const [ivB64, cipherB64] = dlJson.data.split(':');
-            const ivBytes = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
-            const cipherBytes = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
-            const rawKey = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
-            const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-CBC' }, false, ['decrypt']);
-            const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, key, cipherBytes);
-            return JSON.parse(new TextDecoder().decode(plain));
-        } catch (err) {
-            throw new Error(`02moviedownloader decryption failed: ${err.message}`);
-        }
+        const [ivB64, cipherB64] = dlJson.data.split(':');
+        const ivBytes = Uint8Array.from(atob(ivB64), c => c.charCodeAt(0));
+        const cipherBytes = Uint8Array.from(atob(cipherB64), c => c.charCodeAt(0));
+        const rawKey = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+        const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-CBC' }, false, ['decrypt']);
+        const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: ivBytes }, key, cipherBytes);
+        return JSON.parse(new TextDecoder().decode(plain));
     }
     return dlJson;
+}
+
+async function solvePoW(challenge, difficulty) {
+    const prefix = '0'.repeat(difficulty);
+    let nonce = 0;
+    while (true) {
+        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(challenge + String(nonce)));
+        const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+        if (hex.startsWith(prefix)) return String(nonce);
+        nonce++;
+    }
 }
 
 function extractDownloaderOptions(data) {
@@ -199,6 +230,8 @@ function extractOptions(data, server) {
 }
 
 export async function getStream(id, s, e) {
+    const token = await fetchToken(id, s, e);
+
     const primaryPath = s && e
         ? `/api/tv/download?id=${id}&season=${s}&episode=${e}`
         : `/api/movies/download?id=${id}`;
@@ -208,8 +241,8 @@ export async function getStream(id, s, e) {
         : `/api/movies/fallback?tmdbId=${id}`;
 
     const [primary, fallback, downloader] = await Promise.allSettled([
-        fetchDecrypted(primaryPath),
-        fetchDecrypted(fallbackPath),
+        fetchDecrypted(primaryPath, token),
+        fetchDecrypted(fallbackPath, token),
         fetchDownloaderServer3(id, s, e),
     ]);
 
@@ -240,21 +273,9 @@ export async function getStream(id, s, e) {
     return hit ? hit.value : null;
 }
 
-async function verifyDownload(url) {
-    try {
-        const res = await fetch(url, {
-            method: 'HEAD',
-            headers: { 'User-Agent': HEADERS['User-Agent'] },
-            signal: AbortSignal.timeout(8000),
-            redirect: 'follow',
-        });
-        return res.status < 400 || res.status === 405;
-    } catch {
-        return false;
-    }
-}
-
 export async function getDownloads(id, s, e) {
+    const token = await fetchToken(id, s, e);
+
     const primaryPath = s && e
         ? `/api/tv/download?id=${id}&season=${s}&episode=${e}`
         : `/api/movies/download?id=${id}`;
@@ -264,8 +285,8 @@ export async function getDownloads(id, s, e) {
         : `/api/movies/fallback?tmdbId=${id}`;
 
     const [primary, fallback, downloader] = await Promise.allSettled([
-        fetchDecrypted(primaryPath),
-        fetchDecrypted(fallbackPath),
+        fetchDecrypted(primaryPath, token),
+        fetchDecrypted(fallbackPath, token),
         fetchDownloaderServer3(id, s, e),
     ]);
 
@@ -291,4 +312,18 @@ export async function getDownloads(id, s, e) {
     );
 
     return verified.filter(o => o.verified).map(({ verified, ...rest }) => rest);
+}
+
+async function verifyDownload(url) {
+    try {
+        const res = await fetch(url, {
+            method: 'HEAD',
+            headers: { 'User-Agent': HEADERS['User-Agent'] },
+            signal: AbortSignal.timeout(8000),
+            redirect: 'follow',
+        });
+        return res.status < 400 || res.status === 405;
+    } catch {
+        return false;
+    }
 }
