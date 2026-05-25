@@ -366,25 +366,20 @@ async function getAllWorkingSources(id, s, e, clientIP, absoluteBase) {
     if (cached !== undefined) return cached;
 
     const fallbackBase = isFallbackNeeded(absoluteBase.replace(/^https?:\/\//, '')) ? FALLBACK_BASE : '';
-    const results = [];
-    const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 12000);
     const cacheKey = `${id}-${s || ''}-${e || ''}`;
+    const results = [];
 
     await Promise.allSettled(
         ACTIVE_SOURCES.map(async cfg => {
-            if (ac.signal.aborted) return;
             try {
                 const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
-                if (!raw || ac.signal.aborted) return;
+                if (!raw) return;
                 const mod = SOURCE_MODULES[cfg.key];
                 const skipVerify = !!mod.SKIP_VERIFY;
                 const allUrls = (mod.MULTI_URL || raw?.allUrls)
                     ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
                     : [typeof raw === 'object' ? raw : { url: raw }];
-
                 for (const candidate of allUrls) {
-                    if (ac.signal.aborted) return;
                     const result = await processSourceCandidate(candidate, cfg, absoluteBase, skipVerify);
                     if (result) { results.push(result); return; }
                 }
@@ -392,7 +387,6 @@ async function getAllWorkingSources(id, s, e, clientIP, absoluteBase) {
         })
     );
 
-    clearTimeout(timer);
     if (results.length > 0) sourceResultCache.set(requestCacheKey, results);
     return results;
 }
@@ -502,7 +496,7 @@ const ROUTE_TESTS = {
     download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
-async function handleRequest(req) {
+async function handleRequest(req, res) {
     const baseUrl = `http://${req.headers.host || 'localhost'}`;
     const reqUrl = new URL(req.url, baseUrl);
     const { pathname, searchParams } = reqUrl;
@@ -535,32 +529,88 @@ async function handleRequest(req) {
     }
 
     if (pathname === '/health' || pathname === '/api/health') {
-        const result = await handleHealth(SOURCE_MODULES, mainCache, verifyStream);
-        return { status: result.status, body: result.body, headers: JSON_CORS };
+        const result = await handleHealth(SOURCE_MODULES, mainCache);
+        return { ...result, headers: { ...result.headers, ...CORS_HEADERS } };
     }
 
     if (pathname === '/movie' || pathname === '/api/movie') {
         const id = searchParams.get('id');
         if (!id) return respondJson(400, { error: 'missing id', route: "/movie?id=:tmdb_id", example: "/movie?id=155" });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-        const [sources, meta, subtitles] = await Promise.all([
-            getAllWorkingSources(id, null, null, clientIP, absoluteBase),
+        const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
+        const cacheKey = `${id}--`;
+
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
+
+        const [meta, subtitles] = await Promise.all([
             getMetadata(id, null, null),
             fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/movie/${id}` }, { base: SUBTITLE_BASES[1], path: `/movie/${id}` }, { base: SUBTITLE_BASES[2], path: `/movie/tt${id}` }]),
         ]);
-        return respondJson(200, { sources, subtitles: subtitles || [], meta, noSources: !sources.length });
+        res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+
+        const sent = new Set();
+        await Promise.allSettled(ACTIVE_SOURCES.map(async cfg => {
+            try {
+                const raw = await fetchSource(cfg, cacheKey, id, null, null, clientIP, absoluteBase, fallbackBase);
+                if (!raw) return;
+                const mod = SOURCE_MODULES[cfg.key];
+                const allUrls = (mod.MULTI_URL || raw?.allUrls)
+                    ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
+                    : [typeof raw === 'object' ? raw : { url: raw }];
+                for (const candidate of allUrls) {
+                    const result = await processSourceCandidate(candidate, cfg, absoluteBase, !!mod.SKIP_VERIFY);
+                    if (result && !sent.has(result.url)) {
+                        sent.add(result.url);
+                        res.write(`data: ${JSON.stringify({ type: 'source', source: result })}\n\n`);
+                        return;
+                    }
+                }
+            } catch { }
+        }));
+
+        res.write(`data: ${JSON.stringify({ type: 'done', total: sent.size })}\n\n`);
+        res.end();
+        return null;
     }
 
     if (pathname === '/tv' || pathname === '/api/tv') {
         const id = searchParams.get('id'), s = searchParams.get('season'), e = searchParams.get('episode');
         if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: "/tv?id=:id&season=:s&episode=:e", example: "/tv?id=1396&season=1&episode=1" });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-        const [sources, meta, subtitles] = await Promise.all([
-            getAllWorkingSources(id, s, e, clientIP, absoluteBase),
+        const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
+        const cacheKey = `${id}-${s}-${e}`;
+
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
+
+        const [meta, subtitles] = await Promise.all([
             getMetadata(id, s, e),
             fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[1], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${s}/${e}` }]),
         ]);
-        return respondJson(200, { sources, subtitles: subtitles || [], meta, noSources: !sources.length });
+        res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+
+        const sent = new Set();
+        await Promise.allSettled(ACTIVE_SOURCES.map(async cfg => {
+            try {
+                const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
+                if (!raw) return;
+                const mod = SOURCE_MODULES[cfg.key];
+                const allUrls = (mod.MULTI_URL || raw?.allUrls)
+                    ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
+                    : [typeof raw === 'object' ? raw : { url: raw }];
+                for (const candidate of allUrls) {
+                    const result = await processSourceCandidate(candidate, cfg, absoluteBase, !!mod.SKIP_VERIFY);
+                    if (result && !sent.has(result.url)) {
+                        sent.add(result.url);
+                        res.write(`data: ${JSON.stringify({ type: 'source', source: result })}\n\n`);
+                        return;
+                    }
+                }
+            } catch { }
+        }));
+
+        res.write(`data: ${JSON.stringify({ type: 'done', total: sent.size })}\n\n`);
+        res.end();
+        return null;
     }
 
     if (pathname === '/subtitle' || pathname === '/subtitles' || pathname === '/api/subtitle' || pathname === '/api/subtitles') {
@@ -797,7 +847,8 @@ const PORT = process.env.PORT || 7860;
 
 http.createServer(async (req, res) => {
     try {
-        const result = await handleRequest(req);
+        const result = await handleRequest(req, res);
+        if (result === null) return;
         const headers = result.headers || {};
         if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
         res.writeHead(result.status, headers);
@@ -809,8 +860,11 @@ http.createServer(async (req, res) => {
         } else {
             res.end(result.body ?? '');
         }
-    } catch {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end('{"error":"internal server error"}');
+    } catch (err) {
+        console.error(err);
+        if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end('{"error":"internal server error"}');
+        }
     }
 }).listen(PORT, '0.0.0.0', () => console.log(`http://localhost:${PORT}`));
