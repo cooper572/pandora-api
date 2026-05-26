@@ -360,37 +360,6 @@ async function processSourceCandidate(raw, cfg, absoluteBase, skipVerify) {
         : null;
 }
 
-async function getAllWorkingSources(id, s, e, clientIP, absoluteBase) {
-    const requestCacheKey = `sources-${id}-${s || ''}-${e || ''}-${absoluteBase}`;
-    const cached = sourceResultCache.get(requestCacheKey);
-    if (cached !== undefined) return cached;
-
-    const fallbackBase = isFallbackNeeded(absoluteBase.replace(/^https?:\/\//, '')) ? FALLBACK_BASE : '';
-    const cacheKey = `${id}-${s || ''}-${e || ''}`;
-    const results = [];
-
-    await Promise.allSettled(
-        ACTIVE_SOURCES.map(async cfg => {
-            try {
-                const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
-                if (!raw) return;
-                const mod = SOURCE_MODULES[cfg.key];
-                const skipVerify = !!mod.SKIP_VERIFY;
-                const allUrls = (mod.MULTI_URL || raw?.allUrls)
-                    ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
-                    : [typeof raw === 'object' ? raw : { url: raw }];
-                for (const candidate of allUrls) {
-                    const result = await processSourceCandidate(candidate, cfg, absoluteBase, skipVerify);
-                    if (result) { results.push(result); return; }
-                }
-            } catch { }
-        })
-    );
-
-    if (results.length > 0) sourceResultCache.set(requestCacheKey, results);
-    return results;
-}
-
 async function getMetadata(id, s, e) {
     const cacheKey = `meta-${id}-${s || ''}-${e || ''}`;
     return getCached(cacheKey, async () => {
@@ -405,7 +374,7 @@ async function getMetadata(id, s, e) {
     }, metaCache);
 }
 
-const testResultCache = new LRUCache(200, 60000);
+const testResultCache = new LRUCache(200, 30000);
 
 async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     const start = Date.now();
@@ -422,54 +391,84 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     if (cfg?.disabled) return respond(false, null, null, 'source disabled');
 
     const cacheKey = `test-${sourceKey}-${id}-${s || ''}-${e || ''}`;
+    const cached = testResultCache.get(cacheKey);
+    if (cached !== undefined) return respond(cached.ok, cached.url, cached.raw_url, cached.error, cached.debug);
 
-    const result = await getCached(cacheKey, async () => {
-        let rawResult = null, fetchError = null;
-        try {
-            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-            rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
-            if (!rawResult) rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 30000);
-            if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
-        } catch (err) { fetchError = err.message; }
+    let rawResult = null, fetchError = null;
+    try {
+        const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+        rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
+        if (!rawResult) rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 30000);
+        if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
+    } catch (err) { fetchError = err.message; }
 
-        const candidates = (mod.MULTI_URL && rawResult?.allUrls?.length)
-            ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
-            : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
-                : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
+    const candidates = (mod.MULTI_URL && rawResult?.allUrls?.length)
+        ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
+        : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
+            : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
 
-        for (const candidate of candidates) {
-            if (mod.SKIP_VERIFY || mod.MULTI_URL) {
-                const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
-                if (!wrappedUrl) continue;
-                if (candidate?.skipProxy || candidate?.skipHlsCheck) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                const playableCheck = await verifyPlayable(wrappedUrl, {}, !!candidate.skipProxy);
-                if (playableCheck.ok || /429|timeout|aborted/.test(playableCheck.error)) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                try {
-                    const headRes = await _originalFetch(wrappedUrl, { method: 'HEAD', headers: { 'User-Agent': getUA() }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
-                    headRes.body?.cancel();
-                    const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-                    if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) return { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                } catch { }
-            } else {
-                if (!(await verifyStream(candidate.url, sourceKey))) continue;
-                const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
-                if (!wrappedUrl) continue;
-                const playableCheck = await verifyPlayable(wrappedUrl);
-                if (!playableCheck.ok) {
-                    const rawHeaders = candidate?.headers || {};
-                    const [proxiedBody, rawCheck] = await Promise.all([
-                        _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
-                        verifyPlayable(candidate.url, rawHeaders),
-                    ]);
-                    return { ok: false, error: playableCheck.error, raw_url: candidate.url, debug: { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl } };
-                }
-                return { ok: true, url: wrappedUrl, raw_url: candidate.url };
-            }
+    for (const candidate of candidates) {
+        const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
+        if (!wrappedUrl) continue;
+
+        if (candidate?.skipProxy) {
+            const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+            testResultCache.set(cacheKey, result);
+            return respond(true, wrappedUrl, candidate.url);
         }
-        return { ok: false, error: fetchError, raw_url: candidates[0]?.url || null };
-    }, testResultCache);
 
-    return respond(result.ok, result.url, result.raw_url, result.error, result.debug);
+        if (candidate?.skipHlsCheck) {
+            try {
+                const r = await _originalFetch(candidate.url, {
+                    signal: AbortSignal.timeout(10000),
+                    headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
+                });
+                if (!r.ok) continue;
+                const text = await r.text();
+                if (!text.trim().startsWith('#EXTM3U')) continue;
+                if (/Too Many Requests/m.test(text)) continue;
+                if (!text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
+                const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                testResultCache.set(cacheKey, result);
+                return respond(true, wrappedUrl, candidate.url);
+            } catch { continue; }
+        }
+
+        if (mod.SKIP_VERIFY || mod.MULTI_URL) {
+            const playableCheck = await verifyPlayable(wrappedUrl, {}, false);
+            if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
+                const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                testResultCache.set(cacheKey, result);
+                return respond(true, wrappedUrl, candidate.url);
+            }
+            try {
+                const headRes = await _originalFetch(wrappedUrl, { method: 'HEAD', headers: { 'User-Agent': getUA() }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
+                headRes.body?.cancel();
+                const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+                if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
+                    const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                    testResultCache.set(cacheKey, result);
+                    return respond(true, wrappedUrl, candidate.url);
+                }
+            } catch { }
+        } else {
+            if (!(await verifyStream(candidate.url, sourceKey))) continue;
+            const playableCheck = await verifyPlayable(wrappedUrl);
+            if (!playableCheck.ok) {
+                const rawHeaders = candidate?.headers || {};
+                const [proxiedBody, rawCheck] = await Promise.all([
+                    _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
+                    verifyPlayable(candidate.url, rawHeaders),
+                ]);
+                return respond(false, null, candidate.url, playableCheck.error, { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl });
+            }
+            const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+            testResultCache.set(cacheKey, result);
+            return respond(true, wrappedUrl, candidate.url);
+        }
+    }
+
+    return respond(false, null, candidates[0]?.url || null, fetchError);
 }
 
 const CORS_HEADERS = {
