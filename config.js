@@ -26,7 +26,6 @@ export const SOURCES = [
     { key: 'tryembed-dub', sourceFile: 'tryembed', label: 'TryEmbed (Dub)', proxyParam: 'tedub', timeout: 25000, jitter: 500, retries: 2 },
     { key: 'movsrc', sourceFile: 'movsrc', label: 'MovSrc', proxyParam: 'ms', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'fireflix', sourceFile: 'fireflix', label: 'FireFlix', proxyParam: 'ff', timeout: 30000, jitter: 500, retries: 2 },
-    { key: 'watchott', sourceFile: 'watchott', label: 'WatchOtt', proxyParam: 'wo', timeout: 30000, jitter: 500, retries: 2 },
     { key: 'flixtrz', sourceFile: 'flixtrz', label: 'FlixTrz', proxyParam: 'fz', timeout: 30000, jitter: 500, retries: 2 },
     { key: 'toustream', sourceFile: 'toustream', label: 'TouStream', proxyParam: 'ts', timeout: 20000, jitter: 400, retries: 1 },
     { key: 'flaxmovies', sourceFile: 'flaxmovies', label: 'FlaxMovies', proxyParam: 'fx', timeout: 20000, jitter: 500, retries: 2 },
