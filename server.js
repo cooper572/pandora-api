@@ -337,29 +337,6 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
     }
 }
 
-async function processSourceCandidate(raw, cfg, absoluteBase, skipVerify) {
-    const candidate = typeof raw === 'object' ? raw : { url: raw };
-
-    if (skipVerify) {
-        const wrapped = wrapUrl(candidate, cfg.key, absoluteBase);
-        if (!wrapped) return null;
-        const playableCheck = await verifyPlayable(wrapped, {}, !!candidate.skipProxy);
-        return (playableCheck.ok || playableCheck.error?.includes('429') || /timeout|aborted/.test(playableCheck.error))
-            ? { source: cfg.key, label: cfg.label ?? cfg.key, url: wrapped }
-            : null;
-    }
-
-    const [verified, wrapped] = await Promise.all([
-        verifyStream(candidate.url, cfg.key),
-        Promise.resolve(wrapUrl(candidate, cfg.key, absoluteBase)),
-    ]);
-    if (!verified || !wrapped) return null;
-    const playableCheck = await verifyPlayable(wrapped, {}, false);
-    return (playableCheck.ok || playableCheck.error?.includes('429') || /timeout|aborted/.test(playableCheck.error))
-        ? { source: cfg.key, label: cfg.label ?? cfg.key, url: wrapped }
-        : null;
-}
-
 async function getMetadata(id, s, e) {
     const cacheKey = `meta-${id}-${s || ''}-${e || ''}`;
     return getCached(cacheKey, async () => {
@@ -495,6 +472,26 @@ const ROUTE_TESTS = {
     download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
+async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
+    const sent = new Set();
+    const host = absoluteBase.replace('http://', '').replace('https://', '');
+
+    await Promise.allSettled(sources.map(async cfg => {
+        try {
+            const tck = `test-${cfg.key}-${id}-${s || ''}-${e || ''}`;
+            testResultCache.map.delete(tck);
+            const result = await handleTestSource(cfg.key, id, s, e, clientIP, host);
+            const parsed = JSON.parse(result.body);
+            if (parsed.ok && parsed.url && !sent.has(parsed.url)) {
+                sent.add(parsed.url);
+                res.write(`data: ${JSON.stringify({ type: 'source', source: { source: cfg.key, label: cfg.label ?? cfg.key, url: parsed.url } })}\n\n`);
+            }
+        } catch { }
+    }));
+
+    return sent.size;
+}
+
 async function handleRequest(req, res) {
     const baseUrl = `http://${req.headers.host || 'localhost'}`;
     const reqUrl = new URL(req.url, baseUrl);
@@ -547,27 +544,8 @@ async function handleRequest(req, res) {
         ]);
         res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
 
-        const sent = new Set();
-        await Promise.allSettled(ACTIVE_SOURCES.map(async cfg => {
-            try {
-                const raw = await fetchSource(cfg, cacheKey, id, null, null, clientIP, absoluteBase, fallbackBase);
-                if (!raw) return;
-                const mod = SOURCE_MODULES[cfg.key];
-                const allUrls = (mod.MULTI_URL || raw?.allUrls)
-                    ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
-                    : [typeof raw === 'object' ? raw : { url: raw }];
-                for (const candidate of allUrls) {
-                    const result = await processSourceCandidate(candidate, cfg, absoluteBase, !!mod.SKIP_VERIFY);
-                    if (result && !sent.has(result.url)) {
-                        sent.add(result.url);
-                        res.write(`data: ${JSON.stringify({ type: 'source', source: result })}\n\n`);
-                        return;
-                    }
-                }
-            } catch { }
-        }));
-
-        res.write(`data: ${JSON.stringify({ type: 'done', total: sent.size })}\n\n`);
+        const total = await streamSources(ACTIVE_SOURCES, id, null, null, clientIP, absoluteBase, res);
+        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
         res.end();
         return null;
     }
@@ -587,27 +565,8 @@ async function handleRequest(req, res) {
         ]);
         res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
 
-        const sent = new Set();
-        await Promise.allSettled(ACTIVE_SOURCES.map(async cfg => {
-            try {
-                const raw = await fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase);
-                if (!raw) return;
-                const mod = SOURCE_MODULES[cfg.key];
-                const allUrls = (mod.MULTI_URL || raw?.allUrls)
-                    ? (raw.allUrls || [raw]).map(u => typeof u === 'object' ? u : { url: u })
-                    : [typeof raw === 'object' ? raw : { url: raw }];
-                for (const candidate of allUrls) {
-                    const result = await processSourceCandidate(candidate, cfg, absoluteBase, !!mod.SKIP_VERIFY);
-                    if (result && !sent.has(result.url)) {
-                        sent.add(result.url);
-                        res.write(`data: ${JSON.stringify({ type: 'source', source: result })}\n\n`);
-                        return;
-                    }
-                }
-            } catch { }
-        }));
-
-        res.write(`data: ${JSON.stringify({ type: 'done', total: sent.size })}\n\n`);
+        const total = await streamSources(ACTIVE_SOURCES, id, null, null, clientIP, absoluteBase, res);
+        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
         res.end();
         return null;
     }

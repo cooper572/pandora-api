@@ -3,7 +3,7 @@
 <script>
     var video = document.getElementById('video');
     var hls = new Hls();
-    hls.loadSource('http://localhost:7860/api?url=https%3A%2F%2Ftight-sun-5ee0.1-e50.workers.dev%2Fmovie%2F3DFf4ocFzN-CcwP5Qr8-OskNIS-zZt1R2JRpL8nKe1c.dw-f60hZ%2Findex.m3u8&vz=1&proxyHeaders=%7B%22User-Agent%22%3A%22Mozilla%2F5.0%20(Windows%20NT%2010.0%3B%20Win64%3B%20x64)%20AppleWebKit%2F537.36%20(KHTML%2C%20like%20Gecko)%20Chrome%2F150%20Safari%2F537.36%22%2C%22Accept%22%3A%22*%2F*%22%2C%22Accept-Language%22%3A%22en-US%2Cen%3Bq%3D0.9%22%2C%22Referer%22%3A%22https%3A%2F%2Fplayer.vidzee.wtf%22%2C%22Origin%22%3A%22https%3A%2F%2Fplayer.vidzee.wtf%22%7D');
+    hls.loadSource('');
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, function () {
         video.play();

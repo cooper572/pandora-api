@@ -41,6 +41,7 @@ export async function handleHealth(SOURCE_MODULES, cache) {
     return {
         status: allOk ? 200 : 207,
         body: JSON.stringify({
+            note: 'This is a health check endpoint. This is extremely unreliable, be sure to test sources directly.',
             status: allOk ? 'ok' : 'degraded',
             timestamp: new Date().toISOString(),
             tmdb: !!process.env.TMDB_API_KEY,
