@@ -178,7 +178,6 @@ async function getStreams(base, type, streamId, hash, expires, clientIP) {
         if (!allUrls.length) return null;
         return { allUrls };
     } catch (err) {
-        console.error('[lookmovie] getStreams error:', err.message);
         return null;
     }
 }

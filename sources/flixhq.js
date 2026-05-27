@@ -210,39 +210,52 @@ async function decryptPlayback(playback) {
         return null;
     }
 
-    const parts = playback.key_parts || [];
-    const edgeKeys = playback.decrypt_keys ? Object.values(playback.decrypt_keys) : [];
+    const parts = (playback.key_parts || []).map(b64urlToBytes);
+    const iv = playback.iv;
+    const payload = playback.payload;
 
-    const candidateBytes = [];
-    for (const k of [...edgeKeys, ...parts]) {
-        const b = b64urlToBytes(k);
-        if (b.length === 16 || b.length === 32) candidateBytes.push(b);
+    const candidates = [];
+
+    const parts32 = parts.filter(p => p.length === 32);
+    const parts24 = parts.filter(p => p.length === 24);
+    const parts16 = parts.filter(p => p.length === 16);
+
+    function xorAll(byteArrays, len) {
+        const out = new Uint8Array(len);
+        for (const b of byteArrays) for (let i = 0; i < len; i++) out[i] ^= b[i] ?? 0;
+        return out;
     }
 
-    if (parts.length >= 2) {
-        const b0 = b64urlToBytes(parts[0]);
-        const b1 = b64urlToBytes(parts[1]);
-        const fwd = new Uint8Array(b0.length + b1.length);
-        fwd.set(b0); fwd.set(b1, b0.length);
-        if (fwd.length === 16 || fwd.length === 32) candidateBytes.push(fwd);
-        const rev = new Uint8Array(b1.length + b0.length);
-        rev.set(b1); rev.set(b0, b1.length);
-        if (rev.length === 16 || rev.length === 32) candidateBytes.push(rev);
+    function concatPair(a, b) {
+        const out = new Uint8Array(a.length + b.length);
+        out.set(a); out.set(b, a.length);
+        return out;
     }
 
-    const ivPairs = [
-        [playback.iv, playback.payload],
-        [playback.iv2, playback.payload2],
-    ].filter(([iv, p]) => iv && p);
+    if (parts32.length > 0) candidates.push(xorAll(parts32, 32));
+    if (parts24.length > 0) candidates.push(xorAll(parts24, 32).slice(0, 32));
+    if (parts16.length > 0) candidates.push(xorAll(parts16, 16));
+    candidates.push(xorAll(parts, 32));
+    candidates.push(xorAll(parts, 16));
 
-    for (const [iv, payload] of ivPairs) {
-        for (const keyBytes of candidateBytes) {
-            const result = await tryAesGcm(iv, payload, keyBytes);
-            if (result) return result;
+    for (let i = 0; i < parts.length; i++) {
+        if (parts[i].length === 32) candidates.push(parts[i]);
+        if (parts[i].length === 16) candidates.push(parts[i]);
+        for (let j = i + 1; j < parts.length; j++) {
+            const c = concatPair(parts[i], parts[j]);
+            if (c.length === 32 || c.length === 16) candidates.push(c);
         }
     }
 
-    throw new Error(`decryption failed — tried ${candidateBytes.length} keys × ${ivPairs.length} pairs`);
+    for (const keyBytes of candidates) {
+        if (keyBytes.length !== 32 && keyBytes.length !== 16) continue;
+        const result = await tryAesGcm(iv, payload, keyBytes);
+        if (result) {
+            return result;
+        }
+    }
+
+    throw new Error(`decryption failed — tried ${candidates.length} candidates`);
 }
 
 export async function getStream(id, s, e) {

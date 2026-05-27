@@ -873,7 +873,6 @@ http.createServer(async (req, res) => {
             res.end(result.body ?? '');
         }
     } catch (err) {
-        console.error(err);
         if (!res.headersSent) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end('{"error":"internal server error"}');

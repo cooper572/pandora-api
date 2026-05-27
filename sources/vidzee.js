@@ -26,40 +26,47 @@ const hlsHeaders = {
     'Origin': PLAYER_URL,
 };
 
+import CryptoJS from 'crypto-js';
+
 async function deriveKey(e) {
     if (!e) return '';
-    const base64ToBytes = (s) => {
+    const atobPolyfill = (s) => {
         const t = Buffer.from(s.replace(/\s+/g, ''), 'base64');
-        return new Uint8Array(t);
+        const a = new Uint8Array(t.length);
+        for (let i = 0; i < t.length; i++) a[i] = t[i];
+        return a;
     };
-    const t = base64ToBytes(e);
+    const t = atobPolyfill(e);
     if (t.length <= 28) return '';
-    const n = t.slice(0, 12);
-    const r = t.slice(12, 28);
-    const a = t.slice(28);
-    const i = new Uint8Array(a.length + r.length);
-    i.set(a, 0);
-    i.set(r, a.length);
-    const encoder = new TextEncoder();
-    const l = await crypto.subtle.digest('SHA-256', encoder.encode('4f2a9c7d1e8b3a6f0d5c2e9a7b1f4d8c'));
-    const o = await crypto.subtle.importKey('raw', l, { name: 'AES-GCM' }, false, ['decrypt']);
-    const c = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: n, tagLength: 128 }, o, i);
+    const r = t.slice(0, 12);
+    const a = t.slice(12, 28);
+    const l = t.slice(28);
+    const s = new Uint8Array(l.length + a.length);
+    s.set(l, 0);
+    s.set(a, l.length);
+    const keyMat = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('c4a8f1d7e2b9a6c3d0f5e8a1b7c4d9e2'));
+    const key = await crypto.subtle.importKey('raw', keyMat, { name: 'AES-GCM' }, false, ['decrypt']);
+    const c = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: r, tagLength: 128 }, key, s);
     return new TextDecoder().decode(c);
 }
 
-async function decrypt(encryptedData, decryptionKey) {
+function decrypt(encryptedData, decryptionKey) {
     if (!encryptedData || !decryptionKey) return '';
-    const decoded = Buffer.from(encryptedData, 'base64').toString('utf8');
-    const [ivBase64, cipherBase64] = decoded.split(':');
-    if (!ivBase64 || !cipherBase64) return '';
-    const iv = Uint8Array.from(Buffer.from(ivBase64, 'base64'));
-    const cipherBytes = Uint8Array.from(Buffer.from(cipherBase64, 'base64'));
-    const encoded = new TextEncoder().encode(decryptionKey);
-    const keyBytes = new Uint8Array(32);
-    keyBytes.set(encoded.slice(0, 32));
-    const cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']);
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, cryptoKey, cipherBytes);
-    return new TextDecoder().decode(decrypted);
+    try {
+        const decoded = Buffer.from(encryptedData, 'base64').toString('utf8');
+        const [ivStr, cipherStr] = decoded.split(':');
+        if (!ivStr || !cipherStr) return '';
+        const iv = CryptoJS.enc.Base64.parse(ivStr);
+        const key = CryptoJS.enc.Utf8.parse(decryptionKey.padEnd(32, '\0'));
+        const result = CryptoJS.AES.decrypt(cipherStr, key, {
+            iv,
+            mode: CryptoJS.mode.CBC,
+            padding: CryptoJS.pad.Pkcs7,
+        });
+        return result.toString(CryptoJS.enc.Utf8) || '';
+    } catch {
+        return '';
+    }
 }
 
 function fetchWithTimeout(url, headers, ms) {
@@ -101,7 +108,7 @@ async function getStream(id, s, e) {
             try {
                 const decrypted = await decrypt(entry.link, decKey);
                 if (decrypted && decrypted.startsWith('http')) {
-                    const check = await fetchWithTimeout(decrypted, hlsHeaders, 5000);
+                    const check = await fetchWithTimeout(decrypted, hlsHeaders, 15000);
                     if (check.ok) return { url: decrypted, headers: hlsHeaders };
                 }
             } catch {
