@@ -1,49 +1,53 @@
 'use strict';
 
-const GATE_URL = 'https://gate.flicky.host';
+const GATE_V15 = 'https://gate.flicky.host/v15';
+const GATE_V17 = 'https://gate.flicky.host/v17';
+const GATE_V4 = 'https://gate.flicky.host/v4';
 const REFERER = 'https://meowtv.ru';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36';
 
-const VERIFY_HEADERS = {
-    'User-Agent': UA,
-    'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': REFERER,
-    'Origin': REFERER,
-};
-
-function fetchWithTimeout(url, headers, ms) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ms);
-    return fetch(url, { headers, signal: controller.signal })
-        .finally(() => clearTimeout(timer));
-}
-
-async function getStream(id, s, e) {
-    const type = s ? 'tv' : 'movie';
-    let url = `${GATE_URL}/v17/${type}/${id}`;
-    if (s) url += `/${s}/${e}`;
-
-    const res = await fetchWithTimeout(url, {
-        'User-Agent': UA,
-        'Accept': 'application/json',
-        'Referer': REFERER,
-        'Origin': REFERER,
-    }, 8000);
-
-    if (!res.ok) throw new Error(`MeowTV gate failed: ${res.status}`);
-    const data = await res.json();
-    const streamUrl = data?.stream?.url;
-    if (!streamUrl || !streamUrl.startsWith('http')) throw new Error('MeowTV: no stream url');
-    return {
-        url: streamUrl,
-        headers: {
-            'User-Agent': UA,
-            'Referer': REFERER,
-            'Origin': REFERER,
-        },
-    };
-}
-
-export { getStream, VERIFY_HEADERS };
 export const SKIP_VERIFY = true;
+export const VERIFY_HEADERS = { 'User-Agent': UA, 'Referer': REFERER, 'Origin': REFERER };
+
+const HEADERS = { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': REFERER, 'Origin': REFERER };
+const OUT_HEADERS = { 'User-Agent': UA, 'Referer': REFERER, 'Origin': REFERER };
+
+function path(type, id, s, e) {
+    return s ? `/${type}/${id}/${s}/${e}` : `/${type}/${id}`;
+}
+
+async function fetchGate(base, type, id, s, e) {
+    const res = await fetch(base + path(type, id, s, e), { headers: HEADERS, signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return null;
+    return res.json();
+}
+
+export async function getStream(id, s, e) {
+    const type = s ? 'tv' : 'movie';
+    const allUrls = [];
+
+    try {
+        const d = await fetchGate(GATE_V15, type, id, s, e);
+        const url = typeof d?.stream === 'string' ? d.stream : d?.stream?.url;
+        if (url?.startsWith('http')) allUrls.push({ url, headers: OUT_HEADERS });
+    } catch { }
+
+    try {
+        const d = await fetchGate(GATE_V17, type, id, s, e);
+        const url = typeof d?.stream === 'string' ? d.stream : d?.stream?.url;
+        if (url?.startsWith('http')) allUrls.push({ url, headers: OUT_HEADERS });
+    } catch { }
+
+    try {
+        const d = await fetchGate(GATE_V4, type, id, s, e);
+        if (Array.isArray(d?.streams)) {
+            for (const lang of ['English', 'Hindi', 'Telugu', 'Tamil', 'Malayalam']) {
+                const s2 = d.streams.find(x => (x.language || '').toLowerCase() === lang.toLowerCase());
+                if (s2?.url?.startsWith('http')) allUrls.push({ url: s2.url, headers: { ...OUT_HEADERS, ...(s2.headers || {}) } });
+            }
+        }
+    } catch { }
+
+    if (!allUrls.length) return null;
+    return { ...allUrls[0], allUrls };
+}

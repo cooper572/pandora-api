@@ -379,7 +379,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
         if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
     } catch (err) { fetchError = err.message; }
 
-    const candidates = (mod.MULTI_URL && rawResult?.allUrls?.length)
+    const candidates = rawResult?.allUrls?.length
         ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
         : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
             : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
@@ -401,10 +401,11 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                     headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
                 });
                 if (!r.ok) continue;
-                const text = await r.text();
-                if (!text.trim().startsWith('#EXTM3U')) continue;
-                if (/Too Many Requests/m.test(text)) continue;
-                if (!text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
+                const ct = (r.headers.get('content-type') || '').toLowerCase();
+                const text = ct.includes('video') || ct.includes('octet-stream') ? null : await r.text();
+                if (text !== null && !text.trim().startsWith('#EXTM3U')) continue;
+                if (text !== null && /Too Many Requests/m.test(text)) continue;
+                if (text !== null && !text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
                 const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
                 testResultCache.set(cacheKey, result);
                 return respond(true, wrappedUrl, candidate.url);
@@ -475,6 +476,7 @@ const ROUTE_TESTS = {
 async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
     const sent = new Set();
     const host = absoluteBase.replace('http://', '').replace('https://', '');
+    const debugResults = [];
 
     await Promise.allSettled(sources.map(async cfg => {
         try {
@@ -482,13 +484,17 @@ async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
             testResultCache.map.delete(tck);
             const result = await handleTestSource(cfg.key, id, s, e, clientIP, host);
             const parsed = JSON.parse(result.body);
+            debugResults.push({ source: cfg.key, ok: parsed.ok, error: parsed.error || null, elapsed_ms: parsed.elapsed_ms });
             if (parsed.ok && parsed.url && !sent.has(parsed.url)) {
                 sent.add(parsed.url);
                 res.write(`data: ${JSON.stringify({ type: 'source', source: { source: cfg.key, label: cfg.label ?? cfg.key, url: parsed.url } })}\n\n`);
             }
-        } catch { }
+        } catch (err) {
+            debugResults.push({ source: cfg.key, ok: false, error: err.message });
+        }
     }));
 
+    res.write(`data: ${JSON.stringify({ type: 'debug', results: debugResults })}\n\n`);
     return sent.size;
 }
 
@@ -565,7 +571,7 @@ async function handleRequest(req, res) {
         ]);
         res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
 
-        const total = await streamSources(ACTIVE_SOURCES, id, null, null, clientIP, absoluteBase, res);
+        const total = await streamSources(ACTIVE_SOURCES, id, s, e, clientIP, absoluteBase, res);
         res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
         res.end();
         return null;

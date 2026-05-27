@@ -143,7 +143,6 @@ async function fetchAndDecrypt(url) {
     const data = await res.json();
     if (data?.v === 4 && data?.payload) {
         try { return await decryptPayload(data.payload); } catch (err) {
-            console.error(`[tulnex] decrypt failed for ${url}:`, err.message);
             return null;
         }
     }
@@ -227,7 +226,6 @@ export async function getStream(id, s, e) {
             const extracted = extractUrl(data);
             if (extracted?.url) return extracted;
         } catch (err) {
-            console.error(`[tulnex] ${src.name} error:`, err.message);
         }
     }
     return null;
