@@ -9,7 +9,7 @@ git remote remove hf 2>nul
 git remote add hf https://huggingface.co/spaces/MissouriMonster/vyla
 
 git remote remove hf2 2>nul
-git remote add hf2 https://huggingface.co/spaces/MissouriMonster/plsdontusethisinurprojectusetheotherone
+git remote add hf2 https://huggingface.co/spaces/MissouriMonster/momo
 
 echo Pushing to Hugging Face...
 git push hf main --force
