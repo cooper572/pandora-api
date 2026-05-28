@@ -29,6 +29,7 @@ export const SOURCES = [
     { key: 'flixtrz', sourceFile: 'flixtrz', label: 'FlixTrz', proxyParam: 'fz', timeout: 30000, jitter: 500, retries: 2, disabled: true },
     { key: 'toustream', sourceFile: 'toustream', label: 'TouStream', proxyParam: 'ts', timeout: 20000, jitter: 400, retries: 1, disabled: true },
     { key: 'flaxmovies', sourceFile: 'flaxmovies', label: 'FlaxMovies', proxyParam: 'fx', timeout: 20000, jitter: 500, retries: 2 },
+    { key: 'vapor', sourceFile: 'vapor', label: 'Vapor', proxyParam: 'vp', timeout: 20000, jitter: 500, retries: 2 }
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
