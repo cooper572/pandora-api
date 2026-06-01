@@ -76,6 +76,13 @@ function hexToUint8(hex) {
     return arr;
 }
 
+let _pbkdf2L1Cache = null;
+async function getPbkdf2L1() {
+    if (_pbkdf2L1Cache) return _pbkdf2L1Cache;
+    _pbkdf2L1Cache = pbkdf2(L1_KEY, L1_SALT, 50000, 32, 'SHA-256');
+    return _pbkdf2L1Cache;
+}
+
 async function pbkdf2(pass, salt, iterations, keyLen, hash) {
     const keyMat = await crypto.subtle.importKey('raw', strToBuffer(pass), { name: 'PBKDF2' }, false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits(
@@ -119,7 +126,7 @@ async function decodeL4(data, key) {
 }
 
 async function decryptPayload(payload) {
-    const xorKey = await pbkdf2(L1_KEY, L1_SALT, 50000, 32, 'SHA-256');
+    const xorKey = await getPbkdf2L1();
 
     if (/^[0-9a-fA-F]+$/.test(payload) && payload.length % 2 === 0) {
         return JSON.parse(xorDecrypt(payload, xorKey));
@@ -164,7 +171,7 @@ async function fetchAndDecrypt(url) {
             },
             signal: safeAbortSignal(8000),
         });
-        if (!res.ok) return null;
+        if (!res.ok) { res.body?.cancel(); return null; }
         const data = await res.json();
         if (data?.v === 4 && data?.payload) {
             try { return await decryptPayload(data.payload); } catch { return null; }
@@ -177,88 +184,96 @@ async function fetchAndDecrypt(url) {
     }
 }
 
+async function probeUrl(url, headers) {
+    try {
+        const probe = await fetch(url, {
+            headers,
+            signal: safeAbortSignal(5000),
+            redirect: 'follow',
+        });
+        if (!probe.ok) return false;
+        const text = await probe.text();
+        if (!text.trim().startsWith('#EXTM3U')) return false;
+
+        let variantUrl = null;
+        for (const line of text.split('\n')) {
+            const t = line.trim();
+            if (t && !t.startsWith('#')) {
+                variantUrl = t.startsWith('http') ? t : new URL(t, url).href;
+                break;
+            }
+        }
+        if (!variantUrl) return true;
+
+        const variantRes = await fetch(variantUrl, {
+            headers,
+            signal: safeAbortSignal(4000),
+            redirect: 'follow',
+        });
+        if (!variantRes.ok) return false;
+        const variantText = await variantRes.text();
+        if (!variantText.trim().startsWith('#EXTM3U')) return false;
+
+        let segUrl = null;
+        for (const line of variantText.split('\n')) {
+            const t = line.trim();
+            if (t && !t.startsWith('#')) {
+                segUrl = t.startsWith('http') ? t : new URL(t, variantUrl).href;
+                break;
+            }
+        }
+        if (segUrl) {
+            try {
+                const segRes = await fetch(segUrl, {
+                    method: 'GET',
+                    headers,
+                    signal: safeAbortSignal(3000),
+                    redirect: 'follow',
+                });
+                if (!segRes.ok && segRes.status !== 206 && segRes.status !== 403) return false;
+                segRes.body?.cancel();
+            } catch {
+                return false;
+            }
+        }
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export async function getStream(id, s, e) {
-    const triedUrls = new Set();
+    const applicableSources = SOURCES.filter(src => !(s && e && !src.tvApi));
 
-    for (const src of SOURCES) {
-        if (s && e && !src.tvApi) continue;
-        const url = s && e
-            ? src.tvApi.replace('${id}', id).replace('${s}', s).replace('${e}', e)
-            : src.movieApi.replace('${id}', id);
-        if (!url) continue;
-        try {
+    const results = await Promise.allSettled(
+        applicableSources.map(async (src) => {
+            const url = s && e
+                ? src.tvApi.replace('${id}', id).replace('${s}', s).replace('${e}', e)
+                : src.movieApi.replace('${id}', id);
+            if (!url) return null;
+
             const data = await fetchAndDecrypt(url);
-            if (!data) continue;
-            const extracted = extractUrl(data);
-            if (!extracted?.url) continue;
+            if (!data) return null;
 
-            const testUrl = extracted.url;
-            if (triedUrls.has(testUrl)) continue;
-            triedUrls.add(testUrl);
+            const extracted = extractUrl(data);
+            if (!extracted?.url) return null;
 
             const headersToSend = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 ...(extracted.headers || {}),
             };
 
-            try {
-                const probe = await fetch(testUrl, {
-                    headers: headersToSend,
-                    signal: safeAbortSignal(6000),
-                    redirect: 'follow',
-                });
-                if (!probe.ok) continue;
-                const text = await probe.text();
-                if (!text.trim().startsWith('#EXTM3U')) continue;
-
-                let variantUrl = null;
-                for (const line of text.split('\n')) {
-                    const t = line.trim();
-                    if (t && !t.startsWith('#')) {
-                        variantUrl = t.startsWith('http') ? t : new URL(t, testUrl).href;
-                        break;
-                    }
-                }
-                if (variantUrl) {
-                    const variantRes = await fetch(variantUrl, {
-                        headers: headersToSend,
-                        signal: safeAbortSignal(5000),
-                        redirect: 'follow',
-                    });
-                    if (!variantRes.ok) continue;
-                    const variantText = await variantRes.text();
-                    if (!variantText.trim().startsWith('#EXTM3U')) continue;
-
-                    let segUrl = null;
-                    for (const line of variantText.split('\n')) {
-                        const t = line.trim();
-                        if (t && !t.startsWith('#')) {
-                            segUrl = t.startsWith('http') ? t : new URL(t, variantUrl).href;
-                            break;
-                        }
-                    }
-                    if (segUrl) {
-                        try {
-                            const segRes = await fetch(segUrl, {
-                                method: 'GET',
-                                headers: headersToSend,
-                                signal: safeAbortSignal(4000),
-                                redirect: 'follow',
-                            });
-                            if (!segRes.ok && segRes.status !== 206 && segRes.status !== 403) continue;
-                            segRes.body?.cancel();
-                        } catch {
-                            continue;
-                        }
-                    }
-                }
-            } catch {
-                continue;
-            }
+            const ok = await probeUrl(extracted.url, headersToSend);
+            if (!ok) return null;
 
             return extracted;
-        } catch { }
+        })
+    );
+
+    for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) return r.value;
     }
+
     return null;
 }
 
@@ -277,7 +292,7 @@ function extractUrl(data) {
                     const headers = headersRaw ? JSON.parse(decodeURIComponent(headersRaw)) : null;
                     return { unwrapped: decodeURIComponent(inner), headers };
                 }
-            } catch (e) { }
+            } catch { }
         }
         return { unwrapped: url, headers: null };
     };

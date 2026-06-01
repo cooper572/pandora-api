@@ -27,8 +27,8 @@ async function tmdbSlug(id, isMovie) {
     const k = process.env.TMDB_API_KEY;
     if (!k) throw new Error('no TMDB key');
     const url = isMovie
-        ? `https://api.themoviedb.org/3/movie/${id}?api_key=${k}`
-        : `https://api.themoviedb.org/3/tv/${id}?api_key=${k}`;
+        ? `https://api.themoviedb.org/3/movie/${id}?api_key=338a47b75eab45d9e64e67088f910f93`
+        : `https://api.themoviedb.org/3/tv/${id}?api_key=338a47b75eab45d9e64e67088f910f93`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`TMDB ${res.status}`);
     const data = await res.json();

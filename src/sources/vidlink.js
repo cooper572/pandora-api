@@ -56,8 +56,12 @@ function bootWasm() {
         await new Promise(r => setTimeout(r, 500));
         if (typeof globalThis.getAdv !== 'function') throw new Error('getAdv not found after WASM boot');
     })();
+
+    bootPromise.catch(() => { bootPromise = null; });
     return bootPromise;
 }
+
+const keepAliveAgent = new https.Agent({ keepAlive: true, maxSockets: 4, timeout: 35000 });
 
 function http1Fetch(url) {
     return new Promise((resolve, reject) => {
@@ -66,6 +70,7 @@ function http1Fetch(url) {
             hostname: u.hostname,
             path: u.pathname + u.search,
             method: 'GET',
+            agent: keepAliveAgent,
             headers: {
                 'User-Agent': UA,
                 'Accept': '*/*',
@@ -82,6 +87,7 @@ function http1Fetch(url) {
             });
             res.on('error', e => reject(e));
         });
+        req.setTimeout(30000, () => { req.destroy(new Error('request timeout')); });
         req.on('error', e => reject(e));
         req.end();
     });
@@ -146,10 +152,7 @@ export async function getStream(id, s, e) {
         playlistUrl.searchParams.delete('host');
         return {
             url: playlistUrl.toString(),
-            headers: {
-                'Referer': `${ORIGIN}/`,
-                'Origin': ORIGIN,
-            },
+            headers: { 'Referer': `${ORIGIN}/`, 'Origin': ORIGIN },
         };
     }
 
@@ -167,10 +170,7 @@ export async function getStream(id, s, e) {
         if (picked) {
             return {
                 url: picked,
-                headers: {
-                    'Referer': `${ORIGIN}/`,
-                    'Origin': ORIGIN,
-                },
+                headers: { 'Referer': `${ORIGIN}/`, 'Origin': ORIGIN },
             };
         }
     }

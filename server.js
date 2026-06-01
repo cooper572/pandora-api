@@ -14,7 +14,7 @@ import { Readable } from 'stream';
 dotenv.config();
 
 const rateLimitMap = new Map();
-const BLOCKED_IPS = new Set(['45.150.110.57']); // Contact me via discord if you are being blocked, I'll spin up a custom server for you: https://vyla.pages.dev/discord
+const BLOCKED_IPS = new Set(['45.150.110.57']);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -29,7 +29,8 @@ process.on('exit', () => posthog?.shutdown());
 process.on('SIGTERM', async () => { await posthog?.shutdown(); process.exit(0); });
 
 if (cluster.isPrimary) {
-    const workerCount = process.env.SPACE_ID ? 4 : 1;
+    const cpus = (await import('os')).default.cpus().length;
+    const workerCount = process.env.SPACE_ID ? Math.min(cpus, 4) : 1;
     for (let i = 0; i < workerCount; i++) cluster.fork();
 
     const toWatch = [
@@ -61,6 +62,25 @@ const NEED_PROXY_REGEX = /https?:\/\/(api2?\.videasy\.net|api\.dmvdriverseducati
 const M3U8_REGEX = /\.m3u8?(\?|$)|mpegurl|m3u8/i;
 const TIKTOK_REGEX = /tiktokcdn\.com|ibyteimg\.com/i;
 const STRIP_REGEX = /seg\.html|enproxy|letsgocdn\d+\.shop/i;
+
+const pendingProxyRequests = new Map();
+const PROXY_CONCURRENCY = 8;
+
+async function throttledFetch(url, opts) {
+    const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
+    const key = urlStr.slice(0, 100);
+
+    while ((pendingProxyRequests.get('__count') || 0) >= PROXY_CONCURRENCY) {
+        await new Promise(r => setTimeout(r, 50 + Math.random() * 50));
+    }
+
+    pendingProxyRequests.set('__count', (pendingProxyRequests.get('__count') || 0) + 1);
+    try {
+        return await _originalFetch(url, opts);
+    } finally {
+        pendingProxyRequests.set('__count', Math.max(0, (pendingProxyRequests.get('__count') || 1) - 1));
+    }
+}
 
 globalThis.fetch = (url, opts) => {
     const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
@@ -97,12 +117,13 @@ class LRUCache {
         if (Date.now() - entry.ts > this.ttl) { this.map.delete(key); return false; }
         return true;
     }
+    get size() { return this.map.size; }
 }
 
-const mainCache = new LRUCache(500, CACHE_TTL);
-const hlsVerifyCache = new LRUCache(300, 180000);
-const metaCache = new LRUCache(200, 1800000);
-const sourceResultCache = new LRUCache(200, 240000);
+const mainCache = new LRUCache(1000, CACHE_TTL);
+const hlsVerifyCache = new LRUCache(500, 180000);
+const metaCache = new LRUCache(500, 1800000);
+const testResultCache = new LRUCache(500, 30000);
 const inflightMap = new Map();
 
 const UA_LIST = [
@@ -117,12 +138,7 @@ const safeDecode = s => { try { return decodeURIComponent(s); } catch { return s
 
 function posthogTrack(event, data, distinctId) {
     if (!posthog) return;
-
-    posthog.capture({
-        distinctId: distinctId || 'anonymous',
-        event,
-        properties: data
-    });
+    posthog.capture({ distinctId: distinctId || 'anonymous', event, properties: data });
 }
 
 const getRequestMeta = (req, reqUrl) => ({
@@ -167,9 +183,9 @@ function getCached(key, fn, cache = mainCache) {
     return p;
 }
 
-const jitter = ms => new Promise(r => setTimeout(r, Math.random() * ms));
+const jitter = ms => ms > 0 ? new Promise(r => setTimeout(r, Math.random() * ms)) : Promise.resolve();
 
-async function withRetry(fn, attempts = 3, delay = 1000) {
+async function withRetry(fn, attempts = 3, delay = 500) {
     for (let i = 0; i < attempts; i++) {
         try {
             const result = await fn();
@@ -257,13 +273,13 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBa
     const primaryTimeout = fallbackBase ? Math.floor(cfg.timeout * 0.6) : cfg.timeout;
     return withTimeout(jitter(cfg.jitter).then(async () => {
         const primary = await withTimeout(
-            getCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 1000)),
+            getCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 500)),
             primaryTimeout
         );
         if (primary) return primary;
         if (!fallbackBase) return null;
         return withTimeout(
-            getCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, fallbackBase, audio), cfg.retries, 1000)),
+            getCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, fallbackBase, audio), cfg.retries, 500)),
             cfg.timeout - primaryTimeout
         );
     }), cfg.timeout);
@@ -293,6 +309,9 @@ function applyCdnHeaders(cleanUrl, extraHeaders, sourceKey) {
 async function verifyStream(rawUrl, sourceKey) {
     const mod = SOURCE_MODULES[sourceKey];
     if (mod.SKIP_VERIFY) return true;
+    const cacheKey = `vstream-${rawUrl}`;
+    const cached = hlsVerifyCache.get(cacheKey);
+    if (cached !== undefined) return cached;
     try {
         const res = await _originalFetch(rawUrl, {
             method: 'HEAD',
@@ -301,8 +320,13 @@ async function verifyStream(rawUrl, sourceKey) {
             signal: AbortSignal.timeout(6000),
         });
         res.body?.cancel();
-        return res.status < 400;
-    } catch { return false; }
+        const ok = res.status < 400;
+        hlsVerifyCache.set(cacheKey, ok);
+        return ok;
+    } catch {
+        hlsVerifyCache.set(cacheKey, false);
+        return false;
+    }
 }
 
 async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = false) {
@@ -325,7 +349,7 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
 
     try {
         const m3u8Res = await _originalFetch(proxiedUrl, {
-            signal: AbortSignal.timeout(15000),
+            signal: AbortSignal.timeout(12000),
             headers: extraHeaders['User-Agent'] ? extraHeaders : { 'User-Agent': getUA(), ...extraHeaders },
         });
 
@@ -348,7 +372,7 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
             }
             if (nextUrl) {
                 if (!nextUrl.startsWith('http')) nextUrl = new URL(nextUrl, proxiedUrl).href;
-                const fetchOpts = { method: 'GET', headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': 'bytes=0-1024' }, signal: AbortSignal.timeout(12000) };
+                const fetchOpts = { method: 'GET', headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': 'bytes=0-1024' }, signal: AbortSignal.timeout(10000) };
                 const nextRes = await _originalFetch(nextUrl, fetchOpts);
                 if (!nextRes.ok && nextRes.status !== 206) return fail(`Variant failed: ${nextRes.status}`);
                 const ct = (nextRes.headers.get('content-type') || '').toLowerCase();
@@ -387,8 +411,6 @@ async function getMetadata(id, s, e) {
     }, metaCache);
 }
 
-const testResultCache = new LRUCache(200, 30000);
-
 async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     const start = Date.now();
     const cfg = SOURCE_MAP[sourceKey];
@@ -409,10 +431,15 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
 
     let rawResult = null, fetchError = null;
     try {
-        const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
         rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
-        if (!rawResult) rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 30000);
-        if (!rawResult && isFallbackNeeded(host)) rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 30000);
+        if (!rawResult) {
+            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 25000);
+        }
+        if (!rawResult && isFallbackNeeded(host)) {
+            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+            rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 25000);
+        }
     } catch (err) { fetchError = err.message; }
 
     const candidates = rawResult?.allUrls?.length
@@ -433,7 +460,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
         if (candidate?.skipHlsCheck) {
             try {
                 const r = await _originalFetch(candidate.url, {
-                    signal: AbortSignal.timeout(10000),
+                    signal: AbortSignal.timeout(8000),
                     headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
                 });
                 if (!r.ok) continue;
@@ -458,7 +485,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                 return respond(true, wrappedUrl, candidate.url);
             }
             try {
-                const headRes = await _originalFetch(candidate.url, { method: 'HEAD', headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) }, signal: AbortSignal.timeout(8000), redirect: 'follow' });
+                const headRes = await _originalFetch(candidate.url, { method: 'HEAD', headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
                 headRes.body?.cancel();
                 const ct = (headRes.headers.get('content-type') || '').toLowerCase();
                 if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
@@ -475,7 +502,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
             if (!playableCheck.ok) {
                 const rawHeaders = candidate?.headers || {};
                 const [proxiedBody, rawCheck] = await Promise.all([
-                    _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
+                    _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
                     verifyPlayable(candidate.url, rawHeaders, true),
                 ]);
                 return respond(false, null, candidate.url, playableCheck.error, { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl });
@@ -513,14 +540,15 @@ const ROUTE_TESTS = {
     download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
-const EARLY_CLOSE_MS = 12000;
+const EARLY_CLOSE_MS = 14000;
+const SOURCE_BATCH_SIZE = 6;
 
 async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
     const sent = new Set();
     const host = absoluteBase.replace('http://', '').replace('https://', '');
     const debugResults = [];
 
-    const tasks = sources.map(async cfg => {
+    const runSource = async (cfg) => {
         try {
             const tck = `test-${cfg.key}-${id}-${s || ''}-${e || ''}`;
             testResultCache.map.delete(tck);
@@ -534,16 +562,31 @@ async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
         } catch (err) {
             debugResults.push({ source: cfg.key, ok: false, error: err.message });
         }
-    });
+    };
 
-    await Promise.race([
-        Promise.allSettled(tasks),
-        new Promise(r => setTimeout(r, EARLY_CLOSE_MS))
-    ]);
+    const deadline = Date.now() + EARLY_CLOSE_MS;
+
+    for (let i = 0; i < sources.length; i += SOURCE_BATCH_SIZE) {
+        if (Date.now() >= deadline) break;
+        const batch = sources.slice(i, i + SOURCE_BATCH_SIZE);
+        const remaining = deadline - Date.now();
+        await Promise.race([
+            Promise.allSettled(batch.map(runSource)),
+            new Promise(r => setTimeout(r, remaining)),
+        ]);
+    }
 
     res.write(`data: ${JSON.stringify({ type: 'debug', results: debugResults })}\n\n`);
     return sent.size;
 }
+
+const rateLimitCleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, rl] of rateLimitMap) {
+        if (now - rl.ts > 60000) rateLimitMap.delete(ip);
+    }
+}, 30000);
+rateLimitCleanupInterval.unref?.();
 
 async function handleRequest(req, res) {
     const baseUrl = `http://${req.headers.host || 'localhost'}`;
@@ -558,23 +601,15 @@ async function handleRequest(req, res) {
     if (now - rl.ts > 10000) { rl.count = 0; rl.ts = now; }
     rl.count++;
     rateLimitMap.set(clientIP, rl);
-    if (rl.count > 50) return respondJson(429, { error: 'rate limited' });
+    if (rl.count > 60) return respondJson(429, { error: 'rate limited' });
 
     if (req.method === 'OPTIONS') return { status: 204, body: '', headers: CORS_HEADERS };
 
     if (pathname === '/' || pathname === '') {
         return {
             status: 200,
-            body: `${LOGO_TEXT}
-
-developed_by: @vyla-entertainment
-github: https://github.com/vyla-entertainment
-docs: https://vyla.mintlify.app
-`,
-            headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
-                ...CORS_HEADERS
-            }
+            body: `${LOGO_TEXT}\n\ndeveloped_by: @vyla-entertainment\ngithub: https://github.com/vyla-entertainment\ndocs: https://vyla.mintlify.app\n`,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS }
         };
     }
 
@@ -596,10 +631,8 @@ docs: https://vyla.mintlify.app
 
     if (pathname === '/movie' || pathname === '/api/movie') {
         const id = searchParams.get('id');
-        if (!id) return respondJson(400, { error: 'missing id', route: "/movie?id=:tmdb_id", example: "/movie?id=155" });
+        if (!id) return respondJson(400, { error: 'missing id', route: '/movie?id=:tmdb_id', example: '/movie?id=155' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-        const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
-        const cacheKey = `${id}--`;
 
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
 
@@ -613,21 +646,17 @@ docs: https://vyla.mintlify.app
         const sourcesToUse = requestedSources.length
             ? ACTIVE_SOURCES.filter(s => requestedSources.includes(s.key))
             : ACTIVE_SOURCES;
-        posthogTrack(
-            'stream-movie',
-            { id, ...getRequestMeta(req, reqUrl) },
-            clientIP
-        ); const total = await streamSources(sourcesToUse, id, null, null, clientIP, absoluteBase, res); res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
+        posthogTrack('stream-movie', { id, ...getRequestMeta(req, reqUrl) }, clientIP);
+        const total = await streamSources(sourcesToUse, id, null, null, clientIP, absoluteBase, res);
+        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
         res.end();
         return null;
     }
 
     if (pathname === '/tv' || pathname === '/api/tv') {
         const id = searchParams.get('id'), s = searchParams.get('season'), e = searchParams.get('episode');
-        if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: "/tv?id=:id&season=:s&episode=:e", example: "/tv?id=1396&season=1&episode=1" });
+        if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: '/tv?id=:id&season=:s&episode=:e', example: '/tv?id=1396&season=1&episode=1' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-        const fallbackBase = isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '';
-        const cacheKey = `${id}-${s}-${e}`;
 
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
 
@@ -641,26 +670,24 @@ docs: https://vyla.mintlify.app
         const sourcesToUse = requestedSources.length
             ? ACTIVE_SOURCES.filter(src => requestedSources.includes(src.key))
             : ACTIVE_SOURCES;
-        posthogTrack(
-            'stream-tv',
-            { id, season: s, episode: e, ...getRequestMeta(req, reqUrl) },
-            clientIP
-        ); const total = await streamSources(sourcesToUse, id, s, e, clientIP, absoluteBase, res); res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
+        posthogTrack('stream-tv', { id, season: s, episode: e, ...getRequestMeta(req, reqUrl) }, clientIP);
+        const total = await streamSources(sourcesToUse, id, s, e, clientIP, absoluteBase, res);
+        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
         res.end();
         return null;
     }
 
     if (pathname === '/subtitle' || pathname === '/subtitles' || pathname === '/api/subtitle' || pathname === '/api/subtitles') {
         return respondJson(200, {
-            routes: { movie: "/subtitles/movie/:id", tv: "/subtitles/tv/:id/:s/:e" },
-            examples: { movie: "/subtitles/movie/155", tv: "/subtitles/tv/1396/1/1" }
+            routes: { movie: '/subtitles/movie/:id', tv: '/subtitles/tv/:id/:s/:e' },
+            examples: { movie: '/subtitles/movie/155', tv: '/subtitles/tv/1396/1/1' }
         });
     }
 
     if (pathname === '/download' || pathname === '/downloads' || pathname === '/api/download' || pathname === '/api/downloads') {
         return respondJson(200, {
-            routes: { movie: "/downloads/movie/:id", tv: "/downloads/tv/:id/:s/:e" },
-            examples: { movie: "/downloads/movie/155", tv: "/downloads/tv/1396/1/1" }
+            routes: { movie: '/downloads/movie/:id', tv: '/downloads/tv/:id/:s/:e' },
+            examples: { movie: '/downloads/movie/155', tv: '/downloads/tv/1396/1/1' }
         });
     }
 
@@ -669,26 +696,17 @@ docs: https://vyla.mintlify.app
     match = ROUTE_TESTS.subtitle_tv.exec(pathname);
     if (match) { posthogTrack('subtitles-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) }); return handleSubtitleTv(match[1], match[2], match[3], CORS_HEADERS); }
     match = ROUTE_TESTS.download_movie.exec(pathname);
-    if (match) {
-        posthogTrack(
-            'downloads-movie',
-            { id: match[1], ...getRequestMeta(req, reqUrl) },
-            clientIP
-        ); return handleDownloadMovie(match[1], CORS_HEADERS);
-    }
-
+    if (match) { posthogTrack('downloads-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }, clientIP); return handleDownloadMovie(match[1], CORS_HEADERS); }
     match = ROUTE_TESTS.download_tv.exec(pathname);
     if (match) { posthogTrack('downloads-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) }); return handleDownloadTv(match[1], match[2], match[3], CORS_HEADERS); }
+
     match = ROUTE_TESTS.test.exec(pathname);
     if (match) {
         const source = searchParams.get('source');
         if (!source || !SOURCE_MAP[source]) return respondJson(400, { error: 'invalid or missing source' });
         const result = await handleTestSource(source, match[1], searchParams.get('season') || searchParams.get('s') || null, searchParams.get('episode') || searchParams.get('e') || null, clientIP, reqUrl.host);
-        posthogTrack(
-            'test',
-            { source, id: match[1], ok: JSON.parse(result.body).ok, ...getRequestMeta(req, reqUrl) },
-            clientIP
-        ); return { status: result.status, body: result.body, headers: JSON_CORS };
+        posthogTrack('test', { source, id: match[1], ok: JSON.parse(result.body).ok, ...getRequestMeta(req, reqUrl) }, clientIP);
+        return { status: result.status, body: result.body, headers: JSON_CORS };
     }
 
     match = ROUTE_TESTS.debug.exec(pathname);
@@ -748,7 +766,7 @@ docs: https://vyla.mintlify.app
                 }
                 const fetchUrl = wrappedUrl || rawUrl;
                 const fetchHeaders = wrappedUrl ? { 'User-Agent': getUA() } : { 'User-Agent': getUA(), ...rawHeaders };
-                const r = await _originalFetch(fetchUrl, { signal: AbortSignal.timeout(20000), headers: { ...fetchHeaders, 'Range': 'bytes=0-511' } });
+                const r = await _originalFetch(fetchUrl, { signal: AbortSignal.timeout(15000), headers: { ...fetchHeaders, 'Range': 'bytes=0-511' } });
                 const ct = (r.headers.get('content-type') || '').toLowerCase();
                 const isMp4 = /\.mp4(\?|$)/i.test(fetchUrl) || ct.includes('video/mp4') || ct.includes('video/mp2t') || ct.includes('octet-stream');
                 if (isMp4) {
@@ -907,8 +925,9 @@ docs: https://vyla.mintlify.app
 
 const PORT = process.env.PORT || 7860;
 
-http.createServer(async (req, res) => {
-    req.socket.setTimeout(60000);
+const server = http.createServer(async (req, res) => {
+    req.socket.setTimeout(90000);
+    req.socket.setNoDelay(true);
     try {
         const result = await handleRequest(req, res);
         if (result === null) return;
@@ -929,4 +948,11 @@ http.createServer(async (req, res) => {
             res.end('{"error":"internal server error"}');
         }
     }
-}).listen(PORT, '0.0.0.0', () => console.log(`http://localhost:${PORT}`));
+});
+
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 70000;
+server.maxHeadersCount = 100;
+server.timeout = 90000;
+
+server.listen(PORT, '0.0.0.0', () => console.log(`http://localhost:${PORT}`));

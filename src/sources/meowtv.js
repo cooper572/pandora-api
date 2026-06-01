@@ -39,36 +39,49 @@ async function apiFetch(path, opts = {}) {
         signal: AbortSignal.timeout(10000),
         ...opts,
     });
-    if (!res.ok) return null;
+    if (!res.ok) { res.body?.cancel(); return null; }
     return res.json();
 }
 
+let _ticketPromise = null;
+let _ticketExpiry = 0;
+const TICKET_TTL = 55000;
+
 async function getTicket() {
-    const challenge = await apiFetch('/altcha/challenge', { method: 'GET' });
-    if (!challenge) return null;
+    const now = Date.now();
+    if (_ticketPromise && now < _ticketExpiry) return _ticketPromise;
 
-    const number = await solveAltcha(
-        challenge.challenge,
-        challenge.salt,
-        challenge.algorithm,
-        challenge.maxnumber
-    );
-    if (number === null) return null;
+    _ticketExpiry = now + TICKET_TTL;
+    _ticketPromise = (async () => {
+        const challenge = await apiFetch('/altcha/challenge', { method: 'GET' });
+        if (!challenge) return null;
 
-    const altcha = btoa(JSON.stringify({
-        algorithm: challenge.algorithm,
-        challenge: challenge.challenge,
-        number,
-        salt: challenge.salt,
-        signature: challenge.signature,
-    }));
+        const number = await solveAltcha(
+            challenge.challenge,
+            challenge.salt,
+            challenge.algorithm,
+            challenge.maxnumber
+        );
+        if (number === null) return null;
 
-    const data = await apiFetch('/streams/ticket', {
-        method: 'POST',
-        headers: { ...HEADERS, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ altcha }),
-    });
-    return data?.ticket ?? null;
+        const altcha = btoa(JSON.stringify({
+            algorithm: challenge.algorithm,
+            challenge: challenge.challenge,
+            number,
+            salt: challenge.salt,
+            signature: challenge.signature,
+        }));
+
+        const data = await apiFetch('/streams/ticket', {
+            method: 'POST',
+            headers: { ...HEADERS, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ altcha }),
+        });
+        return data?.ticket ?? null;
+    })();
+
+    _ticketPromise.catch(() => { _ticketPromise = null; _ticketExpiry = 0; });
+    return _ticketPromise;
 }
 
 async function fetchStream(path, ticket) {
@@ -85,29 +98,34 @@ export async function getStream(id, s, e) {
 
     const isTV = !!s;
     const servers = ['tik', 'nou', 'lux'];
-    const allUrls = [];
 
-    for (const server of servers) {
-        try {
+    const serverResults = await Promise.allSettled(
+        servers.map(async (server) => {
             const path = isTV
                 ? `/streams/tv/${id}/${s}/${e}?s=${encodeURIComponent(server)}`
                 : `/streams/movie/${id}?s=${encodeURIComponent(server)}`;
 
             const data = await fetchStream(path, ticket);
-            if (!data) continue;
+            if (!data) return null;
 
+            const urls = [];
             if (typeof data?.url === 'string' && data.url.startsWith('http')) {
-                allUrls.push({ url: data.url, headers: { ...OUT_HEADERS, ...(data.headers || {}) } });
+                urls.push({ url: data.url, headers: { ...OUT_HEADERS, ...(data.headers || {}) } });
             } else if (Array.isArray(data?.streams)) {
                 for (const lang of ['English', 'Hindi', 'Telugu', 'Tamil', 'Malayalam']) {
                     const stream = data.streams.find(x => (x.language || '').toLowerCase() === lang.toLowerCase());
                     if (stream?.url?.startsWith('http')) {
-                        allUrls.push({ url: stream.url, headers: { ...OUT_HEADERS, ...(stream.headers || {}) } });
+                        urls.push({ url: stream.url, headers: { ...OUT_HEADERS, ...(stream.headers || {}) } });
                     }
                 }
             }
-        } catch { }
-    }
+            return urls.length ? urls : null;
+        })
+    );
+
+    const allUrls = serverResults
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .flatMap(r => r.value);
 
     if (!allUrls.length) return null;
     return { ...allUrls[0], allUrls };
