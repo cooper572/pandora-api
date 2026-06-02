@@ -31,7 +31,83 @@ process.on('SIGTERM', async () => { await posthog?.shutdown(); process.exit(0); 
 if (cluster.isPrimary) {
     const cpus = (await import('os')).default.cpus().length;
     const workerCount = process.env.SPACE_ID ? Math.min(cpus, 4) : 1;
+
+    const sharedCache = new Map();
+    const SHARED_CACHE_TTL = Math.max(CACHE_TTL, 120000);
+    const SHARED_HLS_TTL = 180000;
+    const SHARED_TEST_TTL = 90000;
+    const SHARED_META_TTL = 1800000;
+    const SHARED_CIRCUIT_TTL = 120000;
+
+    const circuitBreakers = new Map();
+
+    const pruneCache = (map) => {
+        const now = Date.now();
+        for (const [k, v] of map) {
+            if (now - v.ts > v.ttl) map.delete(k);
+        }
+    };
+
+    const cacheSetInterval = setInterval(() => {
+        pruneCache(sharedCache);
+    }, 30000);
+    cacheSetInterval.unref();
+
     for (let i = 0; i < workerCount; i++) cluster.fork();
+
+    cluster.on('message', (worker, msg) => {
+        if (!msg || !msg.type) return;
+
+        if (msg.type === 'cache:get') {
+            const entry = sharedCache.get(msg.key);
+            const now = Date.now();
+            if (entry && now - entry.ts <= entry.ttl) {
+                worker.send({ type: 'cache:hit', id: msg.id, value: entry.value });
+            } else {
+                if (entry) sharedCache.delete(msg.key);
+                worker.send({ type: 'cache:miss', id: msg.id });
+            }
+            return;
+        }
+
+        if (msg.type === 'cache:set') {
+            sharedCache.set(msg.key, { value: msg.value, ts: Date.now(), ttl: msg.ttl || SHARED_CACHE_TTL });
+            return;
+        }
+
+        if (msg.type === 'circuit:get') {
+            const entry = circuitBreakers.get(msg.key);
+            const now = Date.now();
+            if (entry && now - entry.ts <= SHARED_CIRCUIT_TTL) {
+                worker.send({ type: 'circuit:state', id: msg.id, state: entry.state, failures: entry.failures });
+            } else {
+                if (entry) circuitBreakers.delete(msg.key);
+                worker.send({ type: 'circuit:state', id: msg.id, state: 'closed', failures: 0 });
+            }
+            return;
+        }
+
+        if (msg.type === 'circuit:update') {
+            const existing = circuitBreakers.get(msg.key) || { state: 'closed', failures: 0, ts: Date.now() };
+            if (msg.success) {
+                circuitBreakers.set(msg.key, { state: 'closed', failures: 0, ts: Date.now() });
+            } else {
+                const failures = existing.failures + 1;
+                const state = failures >= 5 ? 'open' : 'closed';
+                circuitBreakers.set(msg.key, { state, failures, ts: Date.now() });
+            }
+            return;
+        }
+
+        if (msg.type === 'broadcast') {
+            for (const id in cluster.workers) {
+                if (cluster.workers[id] !== worker) {
+                    cluster.workers[id]?.send({ type: 'broadcast:msg', payload: msg.payload });
+                }
+            }
+            return;
+        }
+    });
 
     const toWatch = [
         fileURLToPath(import.meta.url),
@@ -41,17 +117,33 @@ if (cluster.isPrimary) {
         './src/routes/health.js',
     ];
 
-    fs.watch('./src/sources', { persistent: false }, () => {
-        for (const id in cluster.workers) cluster.workers[id].kill();
+    let restarting = false;
+    const scheduleRestart = () => {
+        if (restarting) return;
+        restarting = true;
+        setTimeout(() => {
+            for (const id in cluster.workers) cluster.workers[id]?.kill();
+            restarting = false;
+        }, 500);
+    };
+
+    fs.watch('./src/sources', { persistent: false }, scheduleRestart);
+    toWatch.forEach(f => { try { fs.watch(f, scheduleRestart); } catch { } });
+
+    let restartQueue = 0;
+    cluster.on('exit', (worker, code, signal) => {
+        if (signal === 'SIGKILL' || code === 0) {
+            cluster.fork();
+            return;
+        }
+        restartQueue++;
+        const delay = Math.min(restartQueue * 1000, 5000);
+        setTimeout(() => {
+            restartQueue = Math.max(0, restartQueue - 1);
+            cluster.fork();
+        }, delay);
     });
 
-    toWatch.forEach(f => {
-        fs.watch(f, () => {
-            for (const id in cluster.workers) cluster.workers[id].kill();
-        });
-    });
-
-    cluster.on('exit', () => cluster.fork());
     await new Promise(() => { });
 }
 
@@ -63,22 +155,29 @@ const M3U8_REGEX = /\.m3u8?(\?|$)|mpegurl|m3u8/i;
 const TIKTOK_REGEX = /tiktokcdn\.com|ibyteimg\.com/i;
 const STRIP_REGEX = /seg\.html|enproxy|letsgocdn\d+\.shop/i;
 
-const pendingProxyRequests = new Map();
-const PROXY_CONCURRENCY = 8;
+let proxyActiveCount = 0;
+const PROXY_CONCURRENCY = IS_HF ? 24 : 16;
+const proxyQueue = [];
+
+function runProxyQueue() {
+    while (proxyQueue.length > 0 && proxyActiveCount < PROXY_CONCURRENCY) {
+        const { resolve } = proxyQueue.shift();
+        proxyActiveCount++;
+        resolve();
+    }
+}
 
 async function throttledFetch(url, opts) {
-    const urlStr = typeof url === 'string' ? url : url?.href ?? String(url);
-    const key = urlStr.slice(0, 100);
-
-    while ((pendingProxyRequests.get('__count') || 0) >= PROXY_CONCURRENCY) {
-        await new Promise(r => setTimeout(r, 50 + Math.random() * 50));
+    if (proxyActiveCount >= PROXY_CONCURRENCY) {
+        await new Promise(resolve => proxyQueue.push({ resolve }));
+    } else {
+        proxyActiveCount++;
     }
-
-    pendingProxyRequests.set('__count', (pendingProxyRequests.get('__count') || 0) + 1);
     try {
         return await _originalFetch(url, opts);
     } finally {
-        pendingProxyRequests.set('__count', Math.max(0, (pendingProxyRequests.get('__count') || 1) - 1));
+        proxyActiveCount--;
+        runProxyQueue();
     }
 }
 
@@ -120,11 +219,77 @@ class LRUCache {
     get size() { return this.map.size; }
 }
 
-const mainCache = new LRUCache(1000, CACHE_TTL);
-const hlsVerifyCache = new LRUCache(500, 180000);
+const mainCache = new LRUCache(2000, CACHE_TTL);
+const hlsVerifyCache = new LRUCache(1000, 180000);
 const metaCache = new LRUCache(500, 1800000);
-const testResultCache = new LRUCache(500, 30000);
+const testResultCache = new LRUCache(1000, 90000);
 const inflightMap = new Map();
+const sharedInflight = new Map();
+
+let msgIdCounter = 0;
+const pendingMsgs = new Map();
+
+function ipcSend(msg) {
+    return new Promise((resolve) => {
+        const id = ++msgIdCounter;
+        pendingMsgs.set(id, resolve);
+        process.send({ ...msg, id });
+        setTimeout(() => {
+            if (pendingMsgs.has(id)) {
+                pendingMsgs.delete(id);
+                resolve(null);
+            }
+        }, 200);
+    });
+}
+
+process.on('message', (msg) => {
+    if (!msg) return;
+    if (msg.type === 'cache:hit' || msg.type === 'cache:miss' || msg.type === 'circuit:state') {
+        const resolve = pendingMsgs.get(msg.id);
+        if (resolve) { pendingMsgs.delete(msg.id); resolve(msg); }
+        return;
+    }
+    if (msg.type === 'broadcast:msg') {
+        const { key, value, ttl } = msg.payload || {};
+        if (key && value !== undefined) {
+            mainCache.set(key, value);
+            if (ttl) {
+                testResultCache.set(key, value);
+            }
+        }
+    }
+});
+
+async function sharedCacheGet(key) {
+    const local = mainCache.get(key);
+    if (local !== undefined) return local;
+    if (!process.send) return undefined;
+    const reply = await ipcSend({ type: 'cache:get', key });
+    if (reply?.type === 'cache:hit') {
+        mainCache.set(key, reply.value);
+        return reply.value;
+    }
+    return undefined;
+}
+
+function sharedCacheSet(key, value, ttl) {
+    mainCache.set(key, value);
+    if (process.send) {
+        process.send({ type: 'cache:set', key, value, ttl: ttl || CACHE_TTL });
+        process.send({ type: 'broadcast', payload: { key, value, ttl } });
+    }
+}
+
+async function circuitGet(sourceKey) {
+    if (!process.send) return { state: 'closed', failures: 0 };
+    const reply = await ipcSend({ type: 'circuit:get', key: sourceKey });
+    return { state: reply?.state || 'closed', failures: reply?.failures || 0 };
+}
+
+function circuitUpdate(sourceKey, success) {
+    if (process.send) process.send({ type: 'circuit:update', key: sourceKey, success });
+}
 
 const UA_LIST = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -183,16 +348,38 @@ function getCached(key, fn, cache = mainCache) {
     return p;
 }
 
+function getSharedCached(key, fn, ttl) {
+    const local = mainCache.get(key);
+    if (local !== undefined) return Promise.resolve(local);
+    const inflight = sharedInflight.get(key);
+    if (inflight) return inflight;
+    const p = (async () => {
+        const shared = await sharedCacheGet(key);
+        if (shared !== undefined) return shared;
+        const val = await fn();
+        if (val != null) sharedCacheSet(key, val, ttl);
+        return val;
+    })().then(val => {
+        sharedInflight.delete(key);
+        return val;
+    }, err => {
+        sharedInflight.delete(key);
+        throw err;
+    });
+    sharedInflight.set(key, p);
+    return p;
+}
+
 const jitter = ms => ms > 0 ? new Promise(r => setTimeout(r, Math.random() * ms)) : Promise.resolve();
 
-async function withRetry(fn, attempts = 3, delay = 500) {
+async function withRetry(fn, attempts = 2, delay = 300) {
     for (let i = 0; i < attempts; i++) {
         try {
             const result = await fn();
             if (result != null) return result;
         } catch (err) {
             if (i === attempts - 1) throw err;
-            await new Promise(r => setTimeout(r, delay + Math.random() * delay));
+            await new Promise(r => setTimeout(r, delay + Math.random() * delay * 0.5));
         }
     }
     return null;
@@ -263,7 +450,7 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBa
     if (cfg.multiBase) {
         return withTimeout(jitter(cfg.jitter).then(async () => {
             for (const base of mod.BASES) {
-                const res = await getCached(`${cfg.key}-${base}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, base, clientIP, audio), cfg.retries, 500));
+                const res = await getSharedCached(`${cfg.key}-${base}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, base, clientIP, audio), cfg.retries, 300));
                 if (res) return res;
             }
             return null;
@@ -273,13 +460,13 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBa
     const primaryTimeout = fallbackBase ? Math.floor(cfg.timeout * 0.6) : cfg.timeout;
     return withTimeout(jitter(cfg.jitter).then(async () => {
         const primary = await withTimeout(
-            getCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 500)),
+            getSharedCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 300)),
             primaryTimeout
         );
         if (primary) return primary;
         if (!fallbackBase) return null;
         return withTimeout(
-            getCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, fallbackBase, audio), cfg.retries, 500)),
+            getSharedCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, fallbackBase, audio), cfg.retries, 300)),
             cfg.timeout - primaryTimeout
         );
     }), cfg.timeout);
@@ -399,7 +586,7 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
 
 async function getMetadata(id, s, e) {
     const cacheKey = `meta-${id}-${s || ''}-${e || ''}`;
-    return getCached(cacheKey, async () => {
+    return getSharedCached(cacheKey, async () => {
         const k = process.env.TMDB_API_KEY;
         if (!k || k === 'demo_key_12345ab45d9e64e67088f910f93') return { error: 'TMDB API key not configured', note: 'Set TMDB_API_KEY in .env file' };
         const url = s
@@ -408,7 +595,32 @@ async function getMetadata(id, s, e) {
         const res = await _originalFetch(url, { signal: AbortSignal.timeout(5000) });
         if (!res.ok) { res.body?.cancel(); return { error: `TMDB API error: ${res.status}` }; }
         return res.json();
-    }, metaCache);
+    }, 1800000);
+}
+
+let globalTestConcurrency = 0;
+const MAX_GLOBAL_TEST_CONCURRENCY = IS_HF ? 12 : 20;
+const testQueue = [];
+
+function runTestQueue() {
+    while (testQueue.length > 0 && globalTestConcurrency < MAX_GLOBAL_TEST_CONCURRENCY) {
+        const { resolve } = testQueue.shift();
+        globalTestConcurrency++;
+        resolve();
+    }
+}
+
+async function acquireTestSlot() {
+    if (globalTestConcurrency < MAX_GLOBAL_TEST_CONCURRENCY) {
+        globalTestConcurrency++;
+        return;
+    }
+    await new Promise(resolve => testQueue.push({ resolve }));
+}
+
+function releaseTestSlot() {
+    globalTestConcurrency--;
+    runTestQueue();
 }
 
 async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
@@ -426,94 +638,139 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     if (cfg?.disabled) return respond(false, null, null, 'source disabled');
 
     const cacheKey = `test-${sourceKey}-${id}-${s || ''}-${e || ''}`;
+
     const cached = testResultCache.get(cacheKey);
     if (cached !== undefined) return respond(cached.ok, cached.url, cached.raw_url, cached.error, cached.debug);
 
-    let rawResult = null, fetchError = null;
-    try {
-        rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
-        if (!rawResult) {
-            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-            rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 25000);
-        }
-        if (!rawResult && isFallbackNeeded(host)) {
-            const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-            rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 25000);
-        }
-    } catch (err) { fetchError = err.message; }
-
-    const candidates = rawResult?.allUrls?.length
-        ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
-        : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
-            : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
-
-    for (const candidate of candidates) {
-        const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
-        if (!wrappedUrl) continue;
-
-        if (candidate?.skipProxy) {
-            const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-            testResultCache.set(cacheKey, result);
-            return respond(true, wrappedUrl, candidate.url);
-        }
-
-        if (candidate?.skipHlsCheck) {
-            try {
-                const r = await _originalFetch(candidate.url, {
-                    signal: AbortSignal.timeout(8000),
-                    headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
-                });
-                if (!r.ok) continue;
-                const ct = (r.headers.get('content-type') || '').toLowerCase();
-                const text = ct.includes('video') || ct.includes('octet-stream') ? null : await r.text();
-                if (text !== null && !text.trim().startsWith('#EXTM3U')) continue;
-                if (text !== null && /Too Many Requests/m.test(text)) continue;
-                if (text !== null && !text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
-                const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                testResultCache.set(cacheKey, result);
-                return respond(true, wrappedUrl, candidate.url);
-            } catch { continue; }
-        }
-
-        if (mod.SKIP_VERIFY || mod.MULTI_URL) {
-            const checkUrl = IS_HF ? candidate.url : wrappedUrl;
-            const checkHeaders = IS_HF ? (candidate.headers || {}) : {};
-            const playableCheck = await verifyPlayable(checkUrl, checkHeaders, IS_HF);
-            if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
-                const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                testResultCache.set(cacheKey, result);
-                return respond(true, wrappedUrl, candidate.url);
-            }
-            try {
-                const headRes = await _originalFetch(candidate.url, { method: 'HEAD', headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
-                headRes.body?.cancel();
-                const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-                if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
-                    const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                    testResultCache.set(cacheKey, result);
-                    return respond(true, wrappedUrl, candidate.url);
-                }
-            } catch { }
-        } else {
-            if (!(await verifyStream(candidate.url, sourceKey))) continue;
-            const verifyUrl = IS_HF ? candidate.url : wrappedUrl;
-            const verifyHeaders = IS_HF ? (candidate.headers || {}) : {};
-            const playableCheck = await verifyPlayable(verifyUrl, verifyHeaders, IS_HF);
-            if (!playableCheck.ok) {
-                const rawHeaders = candidate?.headers || {};
-                const [proxiedBody, rawCheck] = await Promise.all([
-                    _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
-                    verifyPlayable(candidate.url, rawHeaders, true),
-                ]);
-                return respond(false, null, candidate.url, playableCheck.error, { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl });
-            }
-            const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-            testResultCache.set(cacheKey, result);
-            return respond(true, wrappedUrl, candidate.url);
-        }
+    const sharedCached = await sharedCacheGet(cacheKey);
+    if (sharedCached !== undefined) {
+        testResultCache.set(cacheKey, sharedCached);
+        return respond(sharedCached.ok, sharedCached.url, sharedCached.raw_url, sharedCached.error);
     }
 
-    return respond(false, null, candidates[0]?.url || null, fetchError);
+    const inflightKey = `inflight-test-${cacheKey}`;
+    const existingInflight = sharedInflight.get(inflightKey);
+    if (existingInflight) {
+        const result = await existingInflight;
+        return respond(result?.ok ?? false, result?.url ?? null, result?.raw_url ?? null, result?.error ?? 'deduped');
+    }
+
+    const circuit = await circuitGet(sourceKey);
+    if (circuit.state === 'open') {
+        return respond(false, null, null, 'circuit open: source temporarily unavailable');
+    }
+
+    await acquireTestSlot();
+
+    const testPromise = (async () => {
+        try {
+            let rawResult = null, fetchError = null;
+            try {
+                rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? FALLBACK_BASE : '');
+                if (!rawResult) {
+                    const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+                    rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 25000);
+                }
+                if (!rawResult && isFallbackNeeded(host)) {
+                    const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
+                    rawResult = await withTimeout(mod.getStream(id, s, e, null, FALLBACK_BASE, audio), 25000);
+                }
+            } catch (err) { fetchError = err.message; }
+
+            const candidates = rawResult?.allUrls?.length
+                ? rawResult.allUrls.map(u => typeof u === 'object' ? u : { url: u })
+                : (Array.isArray(rawResult) ? rawResult.map(u => typeof u === 'object' ? u : { url: u })
+                    : (rawResult ? [{ url: typeof rawResult === 'object' ? rawResult.url : rawResult, headers: rawResult?.headers, skipProxy: rawResult?.skipProxy, skipHlsCheck: rawResult?.skipHlsCheck }] : []));
+
+            for (const candidate of candidates) {
+                const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
+                if (!wrappedUrl) continue;
+
+                if (candidate?.skipProxy) {
+                    const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                    testResultCache.set(cacheKey, result);
+                    sharedCacheSet(cacheKey, result, 90000);
+                    circuitUpdate(sourceKey, true);
+                    return result;
+                }
+
+                if (candidate?.skipHlsCheck) {
+                    try {
+                        const r = await _originalFetch(candidate.url, {
+                            signal: AbortSignal.timeout(8000),
+                            headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
+                        });
+                        if (!r.ok) continue;
+                        const ct = (r.headers.get('content-type') || '').toLowerCase();
+                        const text = ct.includes('video') || ct.includes('octet-stream') ? null : await r.text();
+                        if (text !== null && !text.trim().startsWith('#EXTM3U')) continue;
+                        if (text !== null && /Too Many Requests/m.test(text)) continue;
+                        if (text !== null && !text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
+                        const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                        testResultCache.set(cacheKey, result);
+                        sharedCacheSet(cacheKey, result, 90000);
+                        circuitUpdate(sourceKey, true);
+                        return result;
+                    } catch { continue; }
+                }
+
+                if (mod.SKIP_VERIFY || mod.MULTI_URL) {
+                    const checkUrl = IS_HF ? candidate.url : wrappedUrl;
+                    const checkHeaders = IS_HF ? (candidate.headers || {}) : {};
+                    const playableCheck = await verifyPlayable(checkUrl, checkHeaders, IS_HF);
+                    if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
+                        const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                        testResultCache.set(cacheKey, result);
+                        sharedCacheSet(cacheKey, result, 90000);
+                        circuitUpdate(sourceKey, true);
+                        return result;
+                    }
+                    try {
+                        const headRes = await _originalFetch(candidate.url, { method: 'HEAD', headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
+                        headRes.body?.cancel();
+                        const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+                        if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
+                            const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                            testResultCache.set(cacheKey, result);
+                            sharedCacheSet(cacheKey, result, 90000);
+                            circuitUpdate(sourceKey, true);
+                            return result;
+                        }
+                    } catch { }
+                } else {
+                    if (!(await verifyStream(candidate.url, sourceKey))) continue;
+                    const verifyUrl = IS_HF ? candidate.url : wrappedUrl;
+                    const verifyHeaders = IS_HF ? (candidate.headers || {}) : {};
+                    const playableCheck = await verifyPlayable(verifyUrl, verifyHeaders, IS_HF);
+                    if (!playableCheck.ok) {
+                        const rawHeaders = candidate?.headers || {};
+                        const [proxiedBody, rawCheck] = await Promise.all([
+                            _originalFetch(wrappedUrl, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': getUA() } }).then(r => r.text()).then(t => t.slice(0, 200)).catch(e => e.message),
+                            verifyPlayable(candidate.url, rawHeaders, true),
+                        ]);
+                        circuitUpdate(sourceKey, false);
+                        return { ok: false, url: null, raw_url: candidate.url, error: playableCheck.error, debug: { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl } };
+                    }
+                    const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                    testResultCache.set(cacheKey, result);
+                    sharedCacheSet(cacheKey, result, 90000);
+                    circuitUpdate(sourceKey, true);
+                    return result;
+                }
+            }
+
+            circuitUpdate(sourceKey, false);
+            return { ok: false, url: null, raw_url: candidates[0]?.url || null, error: fetchError };
+        } finally {
+            releaseTestSlot();
+            sharedInflight.delete(inflightKey);
+        }
+    })();
+
+    sharedInflight.set(inflightKey, testPromise);
+
+    const result = await testPromise;
+    return respond(result?.ok ?? false, result?.url ?? null, result?.raw_url ?? null, result?.error ?? null, result?.debug ?? null);
 }
 
 const CORS_HEADERS = {
@@ -540,24 +797,29 @@ const ROUTE_TESTS = {
     download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
-const EARLY_CLOSE_MS = 14000;
-const SOURCE_BATCH_SIZE = 6;
+const EARLY_CLOSE_MS = IS_HF ? 18000 : 14000;
+const SOURCE_BATCH_SIZE = IS_HF ? 4 : 6;
 
 async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
     const sent = new Set();
     const host = absoluteBase.replace('http://', '').replace('https://', '');
     const debugResults = [];
+    let closed = false;
+
+    res.on('close', () => { closed = true; });
+    res.on('error', () => { closed = true; });
 
     const runSource = async (cfg) => {
+        if (closed) return;
         try {
-            const tck = `test-${cfg.key}-${id}-${s || ''}-${e || ''}`;
-            testResultCache.map.delete(tck);
             const result = await handleTestSource(cfg.key, id, s, e, clientIP, host);
             const parsed = JSON.parse(result.body);
             debugResults.push({ source: cfg.key, ok: parsed.ok, error: parsed.error || null, elapsed_ms: parsed.elapsed_ms });
-            if (parsed.ok && parsed.url && !sent.has(parsed.url)) {
+            if (parsed.ok && parsed.url && !sent.has(parsed.url) && !closed) {
                 sent.add(parsed.url);
-                res.write(`data: ${JSON.stringify({ type: 'source', source: { source: cfg.key, label: cfg.label ?? cfg.key, url: parsed.url } })}\n\n`);
+                if (!res.writableEnded && !res.destroyed) {
+                    res.write(`data: ${JSON.stringify({ type: 'source', source: { source: cfg.key, label: cfg.label ?? cfg.key, url: parsed.url } })}\n\n`);
+                }
             }
         } catch (err) {
             debugResults.push({ source: cfg.key, ok: false, error: err.message });
@@ -567,16 +829,18 @@ async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
     const deadline = Date.now() + EARLY_CLOSE_MS;
 
     for (let i = 0; i < sources.length; i += SOURCE_BATCH_SIZE) {
-        if (Date.now() >= deadline) break;
+        if (Date.now() >= deadline || closed) break;
         const batch = sources.slice(i, i + SOURCE_BATCH_SIZE);
-        const remaining = deadline - Date.now();
+        const remaining = Math.max(0, deadline - Date.now());
         await Promise.race([
             Promise.allSettled(batch.map(runSource)),
             new Promise(r => setTimeout(r, remaining)),
         ]);
     }
 
-    res.write(`data: ${JSON.stringify({ type: 'debug', results: debugResults })}\n\n`);
+    if (!res.writableEnded && !res.destroyed) {
+        res.write(`data: ${JSON.stringify({ type: 'debug', results: debugResults })}\n\n`);
+    }
     return sent.size;
 }
 
@@ -601,7 +865,7 @@ async function handleRequest(req, res) {
     if (now - rl.ts > 10000) { rl.count = 0; rl.ts = now; }
     rl.count++;
     rateLimitMap.set(clientIP, rl);
-    if (rl.count > 60) return respondJson(429, { error: 'rate limited' });
+    if (rl.count > 120) return respondJson(429, { error: 'rate limited' });
 
     if (req.method === 'OPTIONS') return { status: 204, body: '', headers: CORS_HEADERS };
 
@@ -634,13 +898,16 @@ async function handleRequest(req, res) {
         if (!id) return respondJson(400, { error: 'missing id', route: '/movie?id=:tmdb_id', example: '/movie?id=155' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
 
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
 
         const [meta, subtitles] = await Promise.all([
             getMetadata(id, null, null),
             fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/movie/${id}` }, { base: SUBTITLE_BASES[1], path: `/movie/${id}` }, { base: SUBTITLE_BASES[2], path: `/movie/tt${id}` }]),
         ]);
-        res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+
+        if (!res.writableEnded && !res.destroyed) {
+            res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+        }
 
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
         const sourcesToUse = requestedSources.length
@@ -648,8 +915,10 @@ async function handleRequest(req, res) {
             : ACTIVE_SOURCES;
         posthogTrack('stream-movie', { id, ...getRequestMeta(req, reqUrl) }, clientIP);
         const total = await streamSources(sourcesToUse, id, null, null, clientIP, absoluteBase, res);
-        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
-        res.end();
+        if (!res.writableEnded && !res.destroyed) {
+            res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
+            res.end();
+        }
         return null;
     }
 
@@ -658,13 +927,16 @@ async function handleRequest(req, res) {
         if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: '/tv?id=:id&season=:s&episode=:e', example: '/tv?id=1396&season=1&episode=1' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
 
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', ...CORS_HEADERS });
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
 
         const [meta, subtitles] = await Promise.all([
             getMetadata(id, s, e),
             fetchSubtitles([{ base: SUBTITLE_BASES[0], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[1], path: `/tv/${id}/${s}/${e}` }, { base: SUBTITLE_BASES[2], path: `/tv/tt${id}/${s}/${e}` }]),
         ]);
-        res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+
+        if (!res.writableEnded && !res.destroyed) {
+            res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`);
+        }
 
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
         const sourcesToUse = requestedSources.length
@@ -672,8 +944,10 @@ async function handleRequest(req, res) {
             : ACTIVE_SOURCES;
         posthogTrack('stream-tv', { id, season: s, episode: e, ...getRequestMeta(req, reqUrl) }, clientIP);
         const total = await streamSources(sourcesToUse, id, s, e, clientIP, absoluteBase, res);
-        res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
-        res.end();
+        if (!res.writableEnded && !res.destroyed) {
+            res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`);
+            res.end();
+        }
         return null;
     }
 
@@ -933,6 +1207,7 @@ const server = http.createServer(async (req, res) => {
         if (result === null) return;
         const headers = result.headers || {};
         if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
+        if (res.headersSent || res.writableEnded) return;
         res.writeHead(result.status, headers);
         if (result.stream) {
             const readable = Readable.fromWeb(result.stream);
@@ -944,8 +1219,10 @@ const server = http.createServer(async (req, res) => {
         }
     } catch (err) {
         if (!res.headersSent) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end('{"error":"internal server error"}');
+            try {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end('{"error":"internal server error"}');
+            } catch { }
         }
     }
 });
@@ -954,5 +1231,9 @@ server.keepAliveTimeout = 65000;
 server.headersTimeout = 70000;
 server.maxHeadersCount = 100;
 server.timeout = 90000;
+
+server.on('error', (err) => {
+    if (err.code !== 'EADDRINUSE') console.error('server error', err.message);
+});
 
 server.listen(PORT, '0.0.0.0', () => console.log(`http://localhost:${PORT}`));
