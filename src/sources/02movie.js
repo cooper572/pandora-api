@@ -1,7 +1,7 @@
 'use strict';
 
 const BASE = 'https://02movie.com';
-const DOWNLOADER_BASE = 'https://02moviedownloader.site';
+const DOWNLOADER_BASE = 'https://02moviedownloader.top';
 
 export const SKIP_VERIFY = true;
 
@@ -84,9 +84,17 @@ async function fetchDownloaderServer3(id, s, e) {
     if (!pageRes.ok) throw new Error(`02moviedownloader page HTTP ${pageRes.status}`);
     const html = await pageRes.text();
 
-    const configMatch = html.match(/const VERIFY_CONFIG\s*=\s*(\{[^;]+\})/);
-    if (!configMatch) throw new Error('02moviedownloader: VERIFY_CONFIG not found in page');
-    const config = JSON.parse(configMatch[1]);
+    const configStart = html.indexOf('VERIFY_CONFIG');
+    if (configStart === -1) throw new Error('02moviedownloader: VERIFY_CONFIG not found in page');
+    const braceStart = html.indexOf('{', configStart);
+    if (braceStart === -1) throw new Error('02moviedownloader: VERIFY_CONFIG opening brace not found');
+    let depth = 0, configEnd = -1;
+    for (let i = braceStart; i < html.length; i++) {
+        if (html[i] === '{') depth++;
+        else if (html[i] === '}') { depth--; if (depth === 0) { configEnd = i; break; } }
+    }
+    if (configEnd === -1) throw new Error('02moviedownloader: VERIFY_CONFIG closing brace not found');
+    const config = JSON.parse(html.slice(braceStart, configEnd + 1));
 
     const { scope, pageNonce, powChallenge, powDifficulty } = config;
     const powNonce = await solvePoW(powChallenge, powDifficulty ?? 4);
@@ -145,12 +153,19 @@ async function solvePoW(challenge, difficulty) {
     const prefix = '0'.repeat(difficulty);
     let nonce = 0;
     while (true) {
-        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(challenge + String(nonce)));
-        const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+        if (nonce % 100 === 0) await new Promise(r => setTimeout(r, 0));
+        const hash = await crypto.subtle.digest(
+            'SHA-256',
+            new TextEncoder().encode(challenge + String(nonce))
+        );
+        const hex = Array.from(new Uint8Array(hash))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
         if (hex.startsWith(prefix)) return String(nonce);
         nonce++;
     }
 }
+
 
 function extractDownloaderOptions(data) {
     const options = [];
@@ -166,14 +181,20 @@ function extractDownloaderOptions(data) {
         });
     }
 
-    const downloads = Array.isArray(data?.data?.downloadData?.data?.downloads)
-        ? data.data.downloadData.data.downloads : [];
+    const candidates = [
+        data?.downloads,
+        data?.data?.downloads,
+        data?.data?.downloadData?.downloads,
+        data?.data?.downloadData?.data?.downloads,
+        data?.downloadData?.data?.downloads,
+    ];
+    const downloads = candidates.find(c => Array.isArray(c) && c.length) ?? [];
     for (const d of downloads) {
         if (d.url) options.push({
             url: d.url,
-            quality: d.resolution ? `${d.resolution}p` : 'Unknown',
+            quality: d.resolution ? `${d.resolution}p` : (d.quality || 'Unknown'),
             size: formatSize(d.size || null),
-            format: 'MP4',
+            format: (d.format || 'mp4').toUpperCase(),
             server: 3,
         });
     }

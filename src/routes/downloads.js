@@ -1,14 +1,11 @@
 import { getDownloads as get02movieDownloads } from '../sources/02movie.js';
-import { getDownloads as getMovieBoxDownloads } from '../sources/moviebox.js';
 
 async function mergeDownloads(tmdbId, season, episode) {
-    const [s02, smb] = await Promise.allSettled([
+    const [s02] = await Promise.allSettled([
         get02movieDownloads(tmdbId, season, episode),
-        getMovieBoxDownloads(tmdbId, season, episode),
     ]);
     return [
         ...(s02.status === 'fulfilled' ? s02.value : []),
-        ...(smb.status === 'fulfilled' ? smb.value : []),
     ];
 }
 
