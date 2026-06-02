@@ -154,7 +154,13 @@ async function tmdbToAnilist(tmdbId, season, info) {
     return bestId;
 }
 
-const SERVERS = ['hollymoviehd', 'allmovies', 'catflix', 'purstream', 'lamda', 'vidlink', 'klikxxi'];
+const SERVERS = [
+    { server: 'vidlink', type: 'hexa' },
+    { server: 'klikxxi', type: 'ophim' },
+    { server: 'purstream', type: 'beta' },
+    { server: 'moviesapi', type: 'alfa' },
+    { server: 'allmovies', type: 'lamda' },
+];
 
 export async function getStream(tmdbId, season, episode, _clientIP, _base, audio = 'sub') {
     const ep = episode ? parseInt(episode, 10) : 1;
@@ -187,7 +193,7 @@ export async function getStream(tmdbId, season, episode, _clientIP, _base, audio
     const segment = season ? `tv/${tmdbId}/${season}/${ep}` : `movie/${tmdbId}`;
 
     const results = await Promise.allSettled(
-        SERVERS.map(async (server) => {
+        SERVERS.map(async ({ server }) => {
             const url = `${API_BASE_URL}/${server}/${segment}`;
             const res = await fetch(url, { headers: REQUEST_HEADERS, signal: AbortSignal.timeout(10000) });
             if (!res.ok) { res.body?.cancel(); throw new Error(`${server}: ${res.status}`); }
