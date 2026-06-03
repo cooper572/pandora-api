@@ -408,6 +408,44 @@ const _processUri = (uri, dir, originBase) => {
 const _STRIP_TEST = /seg\.html|enproxy|tiktokcdn|ibyteimg/i;
 const _URI_REPLACE = /URI="([^"]+)"/g;
 
+function _unwrapProxyUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const inner = parsed.searchParams.get('url');
+        if (inner) return decodeURIComponent(inner);
+    } catch { }
+    return url;
+}
+
+function rewriteM3u8KeyOnly(body, url, extraParam, absoluteBase) {
+    const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
+    const qmark = url.indexOf('?');
+    const base = qmark === -1 ? url : url.slice(0, qmark);
+    const dir = base.slice(0, base.lastIndexOf('/') + 1);
+    const schemeEnd = url.indexOf('//') + 2;
+    const originBase = url.slice(0, url.indexOf('/', schemeEnd));
+    const prefix = `${safeBase}/api?url=`;
+    const lines = body.split('\n');
+    const out = new Array(lines.length);
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const t = line.trim();
+        if (!t) { out[i] = line; continue; }
+        if (t.charCodeAt(0) === 35) {
+            out[i] = t.replace(_URI_REPLACE, (_, uri) => {
+                const resolved = _processUri(uri, dir, originBase);
+                const unwrapped = _unwrapProxyUrl(resolved);
+                return `URI="${prefix}${encodeURIComponent(unwrapped)}${extraParam}"`;
+            });
+        } else {
+            const normalized = _processUri(t, dir, originBase);
+            const unwrapped = _unwrapProxyUrl(normalized);
+            out[i] = unwrapped;
+        }
+    }
+    return out.join('\n');
+}
+
 function rewriteM3u8(body, url, extraParam, absoluteBase) {
     const safeBase = absoluteBase.replace('https://localhost', 'http://localhost').replace('https://127.0.0.1', 'http://127.0.0.1');
     const qmark = url.indexOf('?');
@@ -423,10 +461,15 @@ function rewriteM3u8(body, url, extraParam, absoluteBase) {
         const t = line.trim();
         if (!t) { out[i] = line; continue; }
         if (t.charCodeAt(0) === 35) {
-            out[i] = t.replace(_URI_REPLACE, (_, uri) => `URI="${prefix}${encodeURIComponent(_processUri(uri, dir, originBase))}${extraParam}"`);
+            out[i] = t.replace(_URI_REPLACE, (_, uri) => {
+                const resolved = _processUri(uri, dir, originBase);
+                const unwrapped = _unwrapProxyUrl(resolved);
+                return `URI="${prefix}${encodeURIComponent(unwrapped)}${extraParam}"`;
+            });
         } else {
             const normalized = _processUri(t, dir, originBase);
-            out[i] = `${prefix}${encodeURIComponent(normalized)}${extraParam}${_STRIP_TEST.test(normalized) ? '&tt=1' : ''}`;
+            const unwrapped = _unwrapProxyUrl(normalized);
+            out[i] = `${prefix}${encodeURIComponent(unwrapped)}${extraParam}${_STRIP_TEST.test(unwrapped) ? '&tt=1' : ''}`;
         }
     }
     return out.join('\n');
@@ -436,6 +479,12 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBa
     const mod = SOURCE_MODULES[cfg.key];
     const effectiveBase = getEffectiveBase(absoluteBase);
     const audio = (cfg.key === 'tryembed-dub' || cfg.key === 'vidnest-dub') ? 'dub' : 'sub';
+
+    if (cfg.skipCache) {
+        return withTimeout(jitter(cfg.jitter).then(() =>
+            withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 300)
+        ), cfg.timeout);
+    }
 
     if (cfg.multiBase) {
         return withTimeout(jitter(cfg.jitter).then(async () => {
@@ -717,11 +766,13 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                 if (mod.SKIP_VERIFY || mod.MULTI_URL) {
                     const checkUrl = IS_HF ? candidate.url : wrappedUrl;
                     const checkHeaders = IS_HF ? (candidate.headers || {}) : {};
-                    const playableCheck = await verifyPlayable(checkUrl, checkHeaders, IS_HF);
+                    const playableCheck = await verifyPlayable(checkUrl, checkHeaders, true);
                     if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
                         const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                        testResultCache.set(cacheKey, result);
-                        sharedCacheSet(cacheKey, result, 90000);
+                        if (!rawResult?.skipCache) {
+                            testResultCache.set(cacheKey, result);
+                            sharedCacheSet(cacheKey, result, 90000);
+                        }
                         return result;
                     }
                     try {
@@ -1123,9 +1174,12 @@ async function handleRequest(req, res) {
                     const text = await upstream.text();
                     if (text.trim().startsWith('#EXT') || /megacloud\.animanga\.fun\/(ts-proxy|proxy)/i.test(text.slice(0, 200))) {
                         const absoluteBase = getAbsoluteBase(reqUrl.host);
-                        const rewritten = matchedSource
-                            ? rewriteM3u8(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase)
-                            : rewriteM3u8(text, url, '&vn=1', absoluteBase);
+                        const isTesub = matchedSource?.proxyParam === 'tesub';
+                        const rewritten = isTesub
+                            ? rewriteM3u8KeyOnly(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase)
+                            : matchedSource
+                                ? rewriteM3u8(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase)
+                                : rewriteM3u8(text, url, '&vn=1', absoluteBase);
                         return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...CORS_HEADERS } };
                     }
                     return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
