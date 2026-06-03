@@ -173,7 +173,7 @@ async function getStreams(base, type, streamId, hash, expires, clientIP) {
 
         const allUrls = Object.entries(streams)
             .filter(([, v]) => typeof v === 'string' && v.includes('.m3u8'))
-            .map(([quality, url]) => ({ url, quality, skipProxy: false, skipHlsCheck: true }));
+            .map(([quality, url]) => ({ url, quality, skipProxy: true, skipHlsCheck: true }));
 
         if (!allUrls.length) return null;
         return { allUrls };

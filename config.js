@@ -17,7 +17,7 @@ export const SOURCES = [
     { key: 'fsharetv', sourceFile: 'fsharetv', label: 'FShareTV', proxyParam: 'fs', timeout: 25000, jitter: 600, retries: 2 },
     { key: 'vidapi', sourceFile: 'vidapi', label: 'VidApi', proxyParam: 'va', timeout: 20000, jitter: 500, retries: 2 },
     { key: 'fsonic', sourceFile: 'fsonic', label: 'Fsonic', proxyParam: 'fn', timeout: 35000, jitter: 600, retries: 1 },
-    { key: 'lookmovie', sourceFile: 'lookmovie', label: 'LookMovie', proxyParam: 'lm', timeout: 20000, jitter: 500, retries: 2 },
+    { key: 'lookmovie', sourceFile: 'lookmovie', label: 'LookMovie', proxyParam: 'lm', timeout: 20000, jitter: 500, retries: 2, skipProxy: true },
     { key: 'tryembed-sub', sourceFile: 'tryembed', label: 'TryEmbed (Sub)', proxyParam: 'tesub', timeout: 25000, jitter: 500, retries: 2, skipCache: true, disabled: true },
     { key: 'tryembed-dub', sourceFile: 'tryembed', label: 'TryEmbed (Dub)', proxyParam: 'tedub', timeout: 25000, jitter: 500, retries: 2, skipCache: true, disabled: true },
     { key: 'movsrc', sourceFile: 'movsrc', label: 'MovSrc', proxyParam: 'ms', timeout: 20000, jitter: 500, retries: 2 },
