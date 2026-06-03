@@ -1,5 +1,5 @@
 export const SOURCES = [
-    { key: 'flixhq', sourceFile: 'flixhq', label: 'FlixHQ', proxyParam: 'fq', timeout: 20000, jitter: 600, retries: 2 },
+    { key: 'flixhq', sourceFile: 'flixhq', label: 'FlixHQ', proxyParam: 'fq', timeout: 20000, jitter: 600, retries: 2, skipProxy: true },
     { key: 'meowtv', sourceFile: 'meowtv', label: 'MeowTV', proxyParam: 'mt', timeout: 15000, jitter: 500, retries: 2 },
     { key: 'cinezo', sourceFile: 'cinezo', label: 'Cinezo', proxyParam: 'cz', timeout: 60000, jitter: 500, retries: 2 },
     { key: 'icefy', sourceFile: 'icefy', label: 'Icefy', proxyParam: 'iy', timeout: 20000, jitter: 500, retries: 2, sourcesTimeout: 10000 },
@@ -29,6 +29,7 @@ export const SOURCES = [
     { key: 'videasy', sourceFile: 'videasy', label: 'Videasy', proxyParam: 'vy', timeout: 40000, jitter: 900, retries: 3, sourcesTimeout: 10000 },
     { key: 'peachify', sourceFile: 'peachify', label: 'Peachify', proxyParam: 'py', timeout: 30000, jitter: 500, retries: 2 },
     { key: 'vidify', sourceFile: 'vidify', label: 'Vidify', proxyParam: 'vdy', timeout: 20000, jitter: 700, retries: 2, disabled: true },
+    { key: 'moviebite', sourceFile: 'moviebite', label: 'MovieBite', proxyParam: 'mb', timeout: 25000, jitter: 500, retries: 2, skipProxy: true },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));

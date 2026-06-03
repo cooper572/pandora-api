@@ -1,7 +1,6 @@
 import { webcrypto } from 'crypto';
 
 const BASE = 'https://flixhq.one';
-const F16PX = 'https://weneverbeenfree.com';
 
 export const SKIP_VERIFY = true;
 
@@ -79,10 +78,9 @@ async function fetchEmbedUrl(token, pageUrl, isMovie = false) {
 }
 
 function extractVideoId(embedUrl) {
-    const m = embedUrl.match(/weneverbeenfree\.com\/e\/([a-zA-Z0-9_-]+)/)
-        || embedUrl.match(/f16px\.com\/e\/([a-zA-Z0-9_-]+)/);
+    const m = embedUrl.match(/\/e\/([a-zA-Z0-9_-]+)/);
     if (!m) throw new Error('no video id in ' + embedUrl);
-    return m[1];
+    return { videoId: m[1], embedBase: new URL(embedUrl).origin };
 }
 
 function makeCookieJar() {
@@ -103,17 +101,17 @@ function makeCookieJar() {
     };
 }
 
-async function f16pxChallenge(cookieJar) {
-    const res = await fetch(`${F16PX}/api/videos/access/challenge`, {
+async function f16pxChallenge(cookieJar, embedBase) {
+    const res = await fetch(`${embedBase}/api/videos/access/challenge`, {
         method: 'POST',
-        headers: { 'User-Agent': UA, 'Referer': F16PX, 'Cookie': cookieJar.get() },
+        headers: { 'User-Agent': UA, 'Referer': embedBase, 'Cookie': cookieJar.get() },
         signal: AbortSignal.timeout(8000),
     });
     cookieJar.update(res.headers.get('set-cookie'));
     return res.json();
 }
 
-async function f16pxAttest(challenge, cookieJar) {
+async function f16pxAttest(challenge, cookieJar, embedBase) {
     const { subtle } = webcrypto;
     const keyPair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
     const viewerId = challenge.viewer_hint;
@@ -125,9 +123,9 @@ async function f16pxAttest(challenge, cookieJar) {
     );
     const pubJwk = await subtle.exportKey('jwk', keyPair.publicKey);
 
-    const res = await fetch(`${F16PX}/api/videos/access/attest`, {
+    const res = await fetch(`${embedBase}/api/videos/access/attest`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': UA, 'Referer': F16PX, 'Cookie': cookieJar.get() },
+        headers: { 'Content-Type': 'application/json', 'User-Agent': UA, 'Referer': embedBase, 'Cookie': cookieJar.get() },
         body: JSON.stringify({
             viewer_id: viewerId,
             device_id: deviceId,
@@ -155,14 +153,14 @@ async function f16pxAttest(challenge, cookieJar) {
     return { token: data.token, viewerId, deviceId: data.device_id || deviceId, confidence: data.confidence ?? 0.6 };
 }
 
-async function f16pxPlayback(videoId, attest, cookieJar) {
-    const res = await fetch(`${F16PX}/api/videos/${videoId}/embed/playback`, {
+async function f16pxPlayback(videoId, attest, cookieJar, embedBase) {
+    const res = await fetch(`${embedBase}/api/videos/${videoId}/embed/playback`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'User-Agent': UA,
-            'Referer': `${F16PX}/e/${videoId}`,
-            'Origin': F16PX,
+            'Referer': `${embedBase}/e/${videoId}`,
+            'Origin': embedBase,
             'Cookie': cookieJar.get(),
         },
         body: JSON.stringify({
@@ -266,17 +264,18 @@ export async function getStream(id, s, e) {
     const slug = await tmdbSlug(id, isMovie);
     const { token, pageUrl } = await fetchToken(slug, isMovie, s, e);
     const embedUrl = await fetchEmbedUrl(token, pageUrl, isMovie);
-    const videoId = extractVideoId(embedUrl);
+    const { videoId, embedBase } = extractVideoId(embedUrl);
     const cookieJar = makeCookieJar();
-    const challenge = await f16pxChallenge(cookieJar);
-    const attest = await f16pxAttest(challenge, cookieJar);
-    const playback = await f16pxPlayback(videoId, attest, cookieJar);
+    const challenge = await f16pxChallenge(cookieJar, embedBase);
+    const attest = await f16pxAttest(challenge, cookieJar, embedBase);
+    const playback = await f16pxPlayback(videoId, attest, cookieJar, embedBase);
     const streamUrl = await decryptPlayback(playback);
     return {
         url: streamUrl,
         headers: {
-            'Referer': `${F16PX}/e/${videoId}`,
-            'Origin': F16PX,
+            'Referer': `${embedBase}/e/${videoId}`,
+            'Origin': embedBase,
         },
+        skipProxy: true,
     };
 }

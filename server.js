@@ -891,6 +891,7 @@ const rateLimitCleanupInterval = setInterval(() => {
         if (now - rl.ts > 60000) rateLimitMap.delete(ip);
     }
 }, 30000);
+
 rateLimitCleanupInterval.unref?.();
 
 const FALLBACK_SUB_BASES = ['https://subs.vidsrc.cc', 'https://vidsrc.cc', 'https://api.vidsrc.cc'];
@@ -927,14 +928,14 @@ async function handleRequest(req, res) {
     if (now - rl.ts > 10000) { rl.count = 0; rl.ts = now; }
     rl.count++;
     rateLimitMap.set(clientIP, rl);
-    if (rl.count > 120) return respondJson(429, { error: 'rate limited' });
+    if (rl.count > 10) return respondJson(429, { error: 'rate limited' });
 
     if (req.method === 'OPTIONS') return { status: 204, body: '', headers: CORS_HEADERS };
 
     if (pathname === '/' || pathname === '') {
         return {
             status: 200,
-            body: `${LOGO_TEXT}\n\ndeveloped_by: @vyla-entertainment\ngithub: https://github.com/vyla-entertainment\ndocs: https://vyla.mintlify.app\n`,
+            body: `${LOGO_TEXT}\n\ndeveloped_by: @vyla-entertainment\ngithub: https://github.com/vyla-entertainment\ndocs: https://vyla.mintlify.app\ndmca: https://vyla.mintlify.app/misc/dmca`,
             headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS }
         };
     }

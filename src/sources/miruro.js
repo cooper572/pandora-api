@@ -202,7 +202,7 @@ async function getCachedEpisodeId(anilistId, episodeNumber, category) {
 }
 
 export async function getStream(tmdbId, season, episode, _clientIP, _base, audio = 'sub') {
-    if (!season || !episode) return null;
+    if (!season || !episode || season === 'null' || episode === 'null') return null;
 
     const anime = await isAnime(tmdbId, season).catch(() => false);
     if (!anime) return null;
