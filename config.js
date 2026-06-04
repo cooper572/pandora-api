@@ -390,6 +390,7 @@ export const SOURCES = [
         jitter: 400,
         retries: 1,
         skipVerify: true,
+        skipProxy: true,
         cdnHeaders: [
             {
                 pattern: /toustream.xyz/,

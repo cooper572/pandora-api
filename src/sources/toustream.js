@@ -1,6 +1,8 @@
 const BASE = 'https://toustream.xyz';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+const RES_ORDER = ['2160p', '1440p', '1080p', '1040p', '720p', '692p', '480p', '360p', '240p'];
+
 async function fetchServers(id, s, e) {
     const isMovie = !s || !e;
     const pagePath = isMovie ? `/tou/movies/${id}` : `/tou/tv/${id}/${s}/${e}`;
@@ -18,14 +20,28 @@ async function fetchServers(id, s, e) {
 }
 
 async function tryServer(apiPath, sv, referer) {
-    const res = await fetch(`${BASE}${apiPath}?server=${sv}`, { headers: { 'Referer': referer, 'Accept': 'application/json', 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+    const res = await fetch(`${BASE}${apiPath}?server=${sv}`, {
+        headers: { 'Referer': referer, 'Accept': 'application/json', 'User-Agent': UA },
+        signal: AbortSignal.timeout(8000)
+    });
     if (!res.ok) throw new Error(`${res.status}`);
     const data = await res.json();
-    if (!data?.streamUrl) throw new Error('no streamUrl');
-    const url = data.streamUrl.startsWith('http') ? data.streamUrl : `${BASE}${data.streamUrl}`;
-    const streamHeaders = { 'Referer': 'https://toustream.xyz/', 'Origin': 'https://toustream.xyz', 'User-Agent': UA };
+
+    const resKey = RES_ORDER.find(r => data[r]) ?? (data['Auto'] ? 'Auto' : null);
+    if (!resKey) throw new Error('no stream keys');
+
+    const rawUrl = data[resKey];
+
+    const url = rawUrl.startsWith('http') ? rawUrl : `${BASE}${rawUrl}`;
+
+    const streamHeaders = {
+        'Referer': `${BASE}/`,
+        'Origin': BASE,
+        'User-Agent': UA,
+    };
     const setCookie = res.headers.get('set-cookie');
     if (setCookie) streamHeaders['Cookie'] = setCookie.split(';')[0].trim();
+
     return { url, headers: streamHeaders, isHls: data.isHls === true };
 }
 
