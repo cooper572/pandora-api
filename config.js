@@ -412,6 +412,7 @@ export const SOURCES = [
         retries: 2,
         skipVerify: true,
         multiUrl: true,
+        disabled: true, // Temporarily disabled due to them being unreliable.
         cdnHeaders: [
             {
                 pattern: /flix2watch.pro/i,
@@ -528,7 +529,7 @@ export const SOURCES = [
             },
         ],
     },
-    
+
     {
         key: 'kiroku-sub',
         label: 'Kiroku (Sub)',
