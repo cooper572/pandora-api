@@ -1,53 +1,183 @@
 import { unwrapTulnexProxy } from '../utils/helpers.js';
 
-// chillout gng
+const PLAYER_BASE = 'https://player.cinezo.live';
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-const SOURCES = [
-    { name: 'nova', movieApi: 'https://iwillfuckyourmom.tulnex.com/nova/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/nova/tv/${id}/${s}/${e}' },
-    { name: 'vaplayer', movieApi: 'https://iwillfuckyourmom.tulnex.com/vaplayer/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vaplayer/tv/${id}/${s}/${e}' },
-    { name: 'orion', movieApi: 'https://iwillfuckyourmom.tulnex.com/orion/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/orion/tv/${id}/${s}/${e}' },
-    { name: 've-yoru', movieApi: 'https://iwillfuckyourmom.tulnex.com/ve/server/Yoru/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/ve/server/Yoru/tv/${id}/${s}/${e}' },
-    { name: 'nhdapi', movieApi: 'https://iwillfuckyourmom.tulnex.com/nhdapi/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/nhdapi/tv/${id}/${s}/${e}' },
-    { name: 'watchflix', movieApi: 'https://iwillfuckyourmom.tulnex.com/watchflix/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/watchflix/tv/${id}/${s}/${e}' },
-    { name: '111movies-cobra', movieApi: 'https://iwillfuckyourmom.tulnex.com/111movies/cobra/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/111movies/cobra/tv/${id}/${s}/${e}' },
-    { name: '111movies-bravo', movieApi: 'https://iwillfuckyourmom.tulnex.com/111movies/Bravo/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/111movies/Bravo/tv/${id}/${s}/${e}' },
-    { name: 'youplex', movieApi: 'https://iwillfuckyourmom.tulnex.com/youplex/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/youplex/tv/${id}/${s}/${e}' },
-    { name: '1shows', movieApi: 'https://iwillfuckyourmom.tulnex.com/1shows/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/1shows/tv/${id}/${s}/${e}' },
-    { name: 've-neon', movieApi: 'https://iwillfuckyourmom.tulnex.com/ve/server/Neon/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/ve/server/Neon/tv/${id}/${s}/${e}' },
-    { name: 'icefy', movieApi: 'https://iwillfuckyourmom.tulnex.com/icefy/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/icefy/tv/${id}/${s}/${e}' },
-    { name: 'uniquestream', movieApi: 'https://iwillfuckyourmom.tulnex.com/uniquestream/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/uniquestream/tv/${id}/${s}/${e}' },
-    { name: '111movies-alpha', movieApi: 'https://iwillfuckyourmom.tulnex.com/111movies/Alpha/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/111movies/Alpha/tv/${id}/${s}/${e}' },
-    { name: 'fsharetv', movieApi: 'https://iwillfuckyourmom.tulnex.com/fsharetv/movie/${id}', tvApi: '' },
-    { name: 'flicky', movieApi: 'https://iwillfuckyourmom.tulnex.com/flicky/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/flicky/tv/${id}/${s}/${e}' },
-    { name: 'v4', movieApi: 'https://iwillfuckyourmom.tulnex.com/v4/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/v4/tv/${id}/${s}/${e}' },
-    { name: 'vidfast-vfast', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/movie/vfast/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/tv/vfast/${id}/${s}/${e}' },
-    { name: 'moviebox', movieApi: 'https://iwillfuckyourmom.tulnex.com/moviebox/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/moviebox/tv/${id}/${s}/${e}' },
-    { name: 'tik', movieApi: 'https://iwillfuckyourmom.tulnex.com/tik/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/tik/tv/${id}/${s}/${e}' },
-    { name: 'vidzee', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidzee/movie/${id}?server=0', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidzee/tv/${id}/${s}/${e}?server=0' },
-    { name: 'on', movieApi: 'https://iwillfuckyourmom.tulnex.com/on/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/on/tv/${id}/${s}/${e}' },
-    { name: 'inka', movieApi: 'https://iwillfuckyourmom.tulnex.com/inka/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/inka/tv/${id}/${s}/${e}' },
-    { name: 'vidfast-mega', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/movie/Mega/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/tv/Mega/${id}/${s}/${e}' },
-    { name: 'vidfast-vrapid', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/movie/VRapid/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/tv/VRapid/${id}/${s}/${e}' },
-    { name: 'vidfast-alpha', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/movie/Alpha/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidfast/tv/Alpha/${id}/${s}/${e}' },
-    { name: 'onion', movieApi: 'https://iwillfuckyourmom.tulnex.com/onion/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/onion/tv/${id}/${s}/${e}' },
-    { name: 'vidlink', movieApi: 'https://iwillfuckyourmom.tulnex.com/vidlink/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/vidlink/tv/${id}/${s}/${e}' },
-    { name: 'flaxmovies', movieApi: 'https://iwillfuckyourmom.tulnex.com/flaxmovies/movie/${id}', tvApi: 'https://iwillfuckyourmom.tulnex.com/flaxmovies/tv/${id}/${s}/${e}' },
-    { name: 'flixhq', movieApi: 'https://himanshu464121-spiderman.hf.space/api/test/${id}?source=flixhq', tvApi: 'https://himanshu464121-spiderman.hf.space/api/test/${id}?source=flixhq&season=${s}&episode=${e}' },
-];
+let _sourcesCache = null;
+let _sourcesCacheTime = 0;
+
+function safeAbortSignal(ms) {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), ms);
+    return ctrl.signal;
+}
+
+function nodeAtob(b64) {
+    if (typeof atob === 'function') return atob(b64);
+    return Buffer.from(b64, 'base64').toString('binary');
+}
+function base64ToBuffer(b64) {
+    const bin = nodeAtob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+}
+function binaryDecode(encoded) {
+    return nodeAtob(encoded).split(' ').map(s => String.fromCharCode(parseInt(s, 2))).join('');
+}
+function bufferToHex(buf) {
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function strToBuffer(str) { return new TextEncoder().encode(str).buffer; }
+function bufferToStr(buf) { return new TextDecoder().decode(buf); }
+function hexToUint8(hex) {
+    const arr = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < hex.length; i += 2) arr[i / 2] = parseInt(hex.substr(i, 2), 16);
+    return arr;
+}
+
+async function scrapeSources() {
+    const now = Date.now();
+    if (_sourcesCache && now - _sourcesCacheTime < CACHE_TTL_MS) {
+        return _sourcesCache;
+    }
+
+    try {
+        const htmlRes = await fetch(`${PLAYER_BASE}/embed/movie/550`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Referer': PLAYER_BASE + '/',
+            },
+            signal: safeAbortSignal(10000),
+        });
+        if (!htmlRes.ok) throw new Error(`HTML fetch ${htmlRes.status}`);
+        const html = await htmlRes.text();
+
+        const scriptRe = /src="([^"]*\/assets\/[^"]+\.js[^"]*)"/g;
+        const chunkUrls = [];
+        let m;
+        while ((m = scriptRe.exec(html)) !== null) {
+            const src = m[1];
+            chunkUrls.push(src.startsWith('http') ? src : `${PLAYER_BASE}${src}`);
+        }
+
+        if (chunkUrls.length === 0) throw new Error('No JS chunks found in HTML');
+
+        const chunkTexts = await Promise.all(
+            chunkUrls.map(url =>
+                fetch(url, {
+                    headers: { 'Referer': PLAYER_BASE + '/' },
+                    signal: safeAbortSignal(8000),
+                })
+                    .then(r => r.ok ? r.text() : '')
+                    .catch(() => '')
+            )
+        );
+
+        const allParsed = [];
+        for (const text of chunkTexts) {
+            allParsed.push(...parseSourcesFromChunk(text));
+        }
+
+        if (allParsed.length === 0) throw new Error('No sources parsed from JS chunks');
+
+        const seen = new Set();
+        const sources = [];
+        for (const src of allParsed) {
+            const key = `${src.movieApi}||${src.tvApi}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                sources.push(src);
+            }
+        }
+
+        console.log(`[cinezo] Scraped ${sources.length} unique sources from live player JS`);
+        _sourcesCache = sources;
+        _sourcesCacheTime = now;
+        return sources;
+
+    } catch (err) {
+        console.warn(`[cinezo] Source scrape failed (${err.message}), using stale cache or empty`);
+        return _sourcesCache ?? [];
+    }
+}
+
+function parseSourcesFromChunk(js) {
+    const results = [];
+
+    const apiOccurrences = [...js.matchAll(/\bapi\s*:\s*["'`]/g)];
+
+    for (const match of apiOccurrences) {
+        const objStart = findObjectStart(js, match.index);
+        if (objStart === -1) continue;
+        const objEnd = findObjectEnd(js, objStart);
+        if (objEnd === -1) continue;
+
+        const objStr = js.slice(objStart, objEnd + 1);
+        const parsed = parseSourceObject(objStr);
+        if (parsed) results.push(parsed);
+    }
+
+    return results;
+}
+
+function findObjectStart(js, fromIndex) {
+    let depth = 0;
+    for (let i = fromIndex; i >= 0; i--) {
+        if (js[i] === '}') depth++;
+        else if (js[i] === '{') {
+            if (depth === 0) return i;
+            depth--;
+        }
+    }
+    return -1;
+}
+
+function findObjectEnd(js, startIndex) {
+    let depth = 0;
+    for (let i = startIndex; i < js.length; i++) {
+        if (js[i] === '{') depth++;
+        else if (js[i] === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+function parseSourceObject(objStr) {
+    const get = (key) => {
+        const re = new RegExp(`\\b${key}\\s*:\\s*(["\`'])([\\s\\S]*?)\\1`);
+        const m = objStr.match(re);
+        return m ? m[2] : null;
+    };
+
+    const api = get('api');
+    if (!api || !api.includes('http')) return null;
+
+    const tvApi = get('tvApi') ?? '';
+    const name = get('name') ?? '';
+
+    const normMovieApi = api
+        .replace(/\$\{id\}/g, '${id}');
+
+    const normTvApi = tvApi
+        .replace(/\$\{season\}/g, '${s}')
+        .replace(/\$\{episode\}/g, '${e}')
+        .replace(/\$\{id\}/g, '${id}');
+
+    return { name, movieApi: normMovieApi, tvApi: normTvApi };
+}
 
 const L1_KEY = 'Sn00pD0g#L1_X0R_M4st3rK3y!2026sex';
 const L1_SALT = 'xK9!mR2@pL5#nQ8sex';
 const L3_KEY = 'Sn00pD0g#L3_AES_S3cur3K3y@2026$sex';
-const L4_KEYS = ['Sn00pD0g#L4_HMAC_F1n4lW4ll#2026!sex', 'Sn00pD0g#L4_HMAC_F1n4lW4ll#2026', 'Sn00pD0g#L4HMAC_S3xur3W4ll#2026!'];
-
-function safeAbortSignal(ms) { const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), ms); return ctrl.signal; }
-function nodeAtob(b64) { if (typeof atob === 'function') return atob(b64); return Buffer.from(b64, 'base64').toString('binary'); }
-function base64ToBuffer(b64) { const bin = nodeAtob(b64); const buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); return buf.buffer; }
-function binaryDecode(encoded) { return nodeAtob(encoded).split(' ').map(s => String.fromCharCode(parseInt(s, 2))).join(''); }
-function bufferToHex(buf) { return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''); }
-function strToBuffer(str) { return new TextEncoder().encode(str).buffer; }
-function bufferToStr(buf) { return new TextDecoder().decode(buf); }
-function hexToUint8(hex) { const arr = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) arr[i / 2] = parseInt(hex.substr(i, 2), 16); return arr; }
+const L4_KEYS = [
+    'Sn00pD0g#L4_HMAC_F1n4lW4ll#2026!sex',
+    'Sn00pD0g#L4_HMAC_F1n4lW4ll#2026',
+    'Sn00pD0g#L4HMAC_S3xur3W4ll#2026!',
+];
 
 let _pbkdf2L1Cache = null;
 async function getPbkdf2L1() {
@@ -102,7 +232,15 @@ async function decryptPayload(payload) {
 }
 async function fetchAndDecrypt(url) {
     try {
-        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36', 'Accept': 'application/json, */*', 'Origin': 'https://player.cinezo.live', 'Referer': 'https://player.cinezo.live/' }, signal: safeAbortSignal(8000) });
+        const res = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+                'Accept': 'application/json, */*',
+                'Origin': 'https://player.cinezo.live',
+                'Referer': 'https://player.cinezo.live/',
+            },
+            signal: safeAbortSignal(8000),
+        });
         if (!res.ok) { res.body?.cancel(); return null; }
         const data = await res.json();
         if (data?.v === 4 && data?.payload) { try { return await decryptPayload(data.payload); } catch { return null; } }
@@ -145,22 +283,33 @@ async function probeUrl(url, headers) {
 }
 
 export async function getStream({ id, s, e }) {
-    const applicableSources = SOURCES.filter(src => !(s && e && !src.tvApi));
+    const sources = await scrapeSources();
+
+    const applicableSources = sources.filter(src => !(s && e && !src.tvApi));
+
     const results = await Promise.allSettled(
         applicableSources.map(async (src) => {
-            const url = s && e ? src.tvApi.replace('${id}', id).replace('${s}', s).replace('${e}', e) : src.movieApi.replace('${id}', id);
+            const url = s && e
+                ? src.tvApi.replace('${id}', id).replace('${s}', s).replace('${e}', e)
+                : src.movieApi.replace('${id}', id);
             if (!url) return null;
             const data = await fetchAndDecrypt(url);
             if (!data) return null;
             const extracted = extractUrl(data);
             if (!extracted?.url) return null;
-            const headersToSend = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...(extracted.headers || {}) };
+            const headersToSend = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                ...(extracted.headers || {}),
+            };
             const ok = await probeUrl(extracted.url, headersToSend);
             if (!ok) return null;
             return extracted;
         })
     );
-    for (const r of results) { if (r.status === 'fulfilled' && r.value) return r.value; }
+
+    for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) return r.value;
+    }
     return null;
 }
 
@@ -186,7 +335,9 @@ function extractUrl(data) {
     if (data.m3u8 && typeof data.m3u8 === 'string' && data.m3u8.includes('http')) return wrap(data.m3u8, headers);
     if (data.sources?.primary?.url) return wrap(data.sources.primary.url, data.sources.primary.headers || headers);
     if (data.sources && Array.isArray(data.sources) && data.sources.length > 0) {
-        const sorted = data.sources.filter(s => s.url && s.url.includes('http')).sort((a, b) => parseInt((b.quality || '').replace('p', '') || '0') - parseInt((a.quality || '').replace('p', '') || '0'));
+        const sorted = data.sources
+            .filter(s => s.url && s.url.includes('http'))
+            .sort((a, b) => parseInt((b.quality || '').replace('p', '') || '0') - parseInt((a.quality || '').replace('p', '') || '0'));
         if (sorted.length > 0) return wrap(sorted[0].url, sorted[0].headers || headers);
     }
     if (data.languages && Array.isArray(data.languages)) {
