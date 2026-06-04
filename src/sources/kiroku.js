@@ -106,7 +106,9 @@ async function getSources(malId, episode, provider, audio) {
 
 export async function getStream({ id, s, e, audio = 'sub' }) {
     const mediaType = s ? 'tv' : 'movie';
+    if (mediaType === 'movie') return null;
     const info = await getTmdbInfo(id, mediaType, s || null);
+    if (!info.isAnime) return null;
     const malId = await tmdbToMalId(id, mediaType, s, info.titles || [], info.year);
     if (!malId) return null;
 
