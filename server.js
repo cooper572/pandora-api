@@ -123,18 +123,6 @@ const M3U8_REGEX = /\.m3u8?(\?|$)|mpegurl|m3u8/i;
 const TIKTOK_REGEX = /tiktokcdn\.com|ibyteimg\.com/i;
 const STRIP_REGEX = /seg\.html|enproxy|letsgocdn\d+\.shop/i;
 
-const outboundInflight = new Map();
-
-async function dedupedFetch(url, opts) {
-    const urlStr = typeof url === 'string' ? url : String(url);
-    const key = urlStr.slice(0, 200);
-    const existing = outboundInflight.get(key);
-    if (existing) return existing;
-    const p = _originalFetch(url, opts).finally(() => outboundInflight.delete(key));
-    outboundInflight.set(key, p);
-    return p;
-}
-
 let proxyActiveCount = 0;
 const PROXY_CONCURRENCY = IS_HF ? 40 : 300;
 const proxyQueue = [];

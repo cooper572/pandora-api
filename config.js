@@ -382,19 +382,6 @@ export const SOURCES = [
     },
 
     {
-        key: 'flixtrz',
-        label: 'FlixTrz',
-        sourceFile: 'flixtrz',
-        proxyParam: 'fz',
-        timeout: 30000,
-        jitter: 500,
-        retries: 2,
-        disabled: true,
-        skipVerify: true,
-        multiUrl: true,
-    },
-
-    {
         key: 'toustream',
         label: 'TouStream',
         sourceFile: 'toustream',
