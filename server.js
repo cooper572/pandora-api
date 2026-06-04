@@ -661,21 +661,28 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                 if (cfg.skipVerify || cfg.multiUrl) {
                     const checkUrl = IS_HF ? candidate.url : wrappedUrl;
                     const checkHeaders = IS_HF ? (candidate.headers || {}) : {};
-                    const playableCheck = await verifyPlayable(checkUrl, checkHeaders, true);
-                    if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
+                    const playableCheck = await verifyPlayable(checkUrl, checkHeaders, false);
+                    if (playableCheck.ok) {
                         const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); }
+                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, cfg.testCacheTtl ?? 90000); }
+                        return result;
+                    }
+                    if (/timeout|aborted/i.test(playableCheck.error ?? '')) {
+                        const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
+                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 15000); } // short TTL on uncertain results
                         return result;
                     }
                     try {
                         const headRes = await _originalFetch(candidate.url, { method: 'HEAD', headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) }, signal: AbortSignal.timeout(6000), redirect: 'follow' });
                         headRes.body?.cancel();
                         const ct = (headRes.headers.get('content-type') || '').toLowerCase();
-                        if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
+                        if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct) && !ct.includes('mpegurl')) {
                             const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                            testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); return result;
+                            testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, cfg.testCacheTtl ?? 90000);
+                            return result;
                         }
                     } catch { }
+                    continue;
                 } else {
                     if (!(await verifyStream(candidate.url, sourceKey))) continue;
                     const verifyUrl = IS_HF ? candidate.url : wrappedUrl;
