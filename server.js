@@ -31,16 +31,13 @@ process.on('SIGTERM', async () => { await posthog?.shutdown(); process.exit(0); 
 if (cluster.isPrimary) {
     const cpus = (await import('os')).default.cpus().length;
     const workerCount = process.env.SPACE_ID ? Math.min(cpus, 4) : 1;
-
     const sharedCache = new Map();
-
     const pruneCache = (map) => {
         const now = Date.now();
         for (const [k, v] of map) {
             if (now - v.ts > v.ttl) map.delete(k);
         }
     };
-
     const cacheSetInterval = setInterval(() => pruneCache(sharedCache), 30000);
     cacheSetInterval.unref();
 
@@ -51,7 +48,6 @@ if (cluster.isPrimary) {
 
     cluster.on('message', (worker, msg) => {
         if (!msg || !msg.type) return;
-
         if (msg.type === 'cache:get') {
             const entry = sharedCache.get(msg.key);
             const now = Date.now();
@@ -63,7 +59,6 @@ if (cluster.isPrimary) {
             }
             return;
         }
-
         if (msg.type === 'cache:set') {
             sharedCache.set(msg.key, { value: msg.value, ts: Date.now(), ttl: msg.ttl || CACHE_TTL });
             for (const id in cluster.workers) {
@@ -105,7 +100,6 @@ if (cluster.isPrimary) {
             cluster.fork();
         }, delay);
     });
-
     await new Promise(() => { });
 }
 
@@ -136,9 +130,7 @@ async function dedupedFetch(url, opts) {
     const key = urlStr.slice(0, 200);
     const existing = outboundInflight.get(key);
     if (existing) return existing;
-    const p = _originalFetch(url, opts).finally(() => {
-        outboundInflight.delete(key);
-    });
+    const p = _originalFetch(url, opts).finally(() => outboundInflight.delete(key));
     outboundInflight.set(key, p);
     return p;
 }
@@ -181,24 +173,17 @@ globalThis.fetch = (url, opts) => {
         if (!mergedOpts.signal) mergedOpts.signal = AbortSignal.timeout(HF_FETCH_TIMEOUT);
         return _originalFetch(proxied, mergedOpts);
     }
-    if (!opts?.signal) {
-        return _originalFetch(url, { ...opts, signal: AbortSignal.timeout(HF_FETCH_TIMEOUT) });
-    }
+    if (!opts?.signal) return _originalFetch(url, { ...opts, signal: AbortSignal.timeout(HF_FETCH_TIMEOUT) });
     return _originalFetch(url, opts);
 };
 
 class LRUCache {
-    constructor(max, ttl) {
-        this.max = max;
-        this.ttl = ttl;
-        this.map = new Map();
-    }
+    constructor(max, ttl) { this.max = max; this.ttl = ttl; this.map = new Map(); }
     get(key) {
         const entry = this.map.get(key);
         if (!entry) return undefined;
         if (Date.now() - entry.ts > this.ttl) { this.map.delete(key); return undefined; }
-        this.map.delete(key);
-        this.map.set(key, entry);
+        this.map.delete(key); this.map.set(key, entry);
         return entry.val;
     }
     set(key, val) {
@@ -229,19 +214,8 @@ function ipcSend(msg) {
     return new Promise((resolve) => {
         const id = ++msgIdCounter;
         pendingMsgs.set(id, resolve);
-        try {
-            process.send({ ...msg, id });
-        } catch {
-            pendingMsgs.delete(id);
-            resolve(null);
-            return;
-        }
-        setTimeout(() => {
-            if (pendingMsgs.has(id)) {
-                pendingMsgs.delete(id);
-                resolve(null);
-            }
-        }, 150);
+        try { process.send({ ...msg, id }); } catch { pendingMsgs.delete(id); resolve(null); return; }
+        setTimeout(() => { if (pendingMsgs.has(id)) { pendingMsgs.delete(id); resolve(null); } }, 150);
     });
 }
 
@@ -287,7 +261,6 @@ const UA_LIST = [
     'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
 ];
-
 const getUA = () => UA_LIST[Math.floor(Math.random() * UA_LIST.length)];
 const safeDecode = s => { try { return decodeURIComponent(s); } catch { return s; } };
 
@@ -311,10 +284,7 @@ const ALL_SOURCE_MODULES = Object.fromEntries(
     await Promise.all(SOURCES.map(async cfg => [cfg.key, await import(`./src/sources/${cfg.sourceFile}.js`)]))
 );
 
-const SOURCE_MODULES = Object.fromEntries(
-    Object.entries(ALL_SOURCE_MODULES).filter(([key]) => !SOURCE_MAP[key]?.disabled)
-);
-
+const SOURCE_MODULES = Object.fromEntries(Object.entries(ALL_SOURCE_MODULES).filter(([key]) => !SOURCE_MAP[key]?.disabled));
 const ACTIVE_SOURCES = SOURCES.filter(c => !c.disabled);
 
 const getAbsoluteBase = host => (host.startsWith('localhost') || host.startsWith('127.0.0.1')) ? `http://${host}` : `https://${host}`;
@@ -326,14 +296,7 @@ function getCached(key, fn, cache = mainCache) {
     if (hit !== undefined) return Promise.resolve(hit);
     const inflight = inflightMap.get(key);
     if (inflight) return inflight;
-    const p = fn().then(val => {
-        inflightMap.delete(key);
-        if (val != null) cache.set(key, val);
-        return val;
-    }, err => {
-        inflightMap.delete(key);
-        throw err;
-    });
+    const p = fn().then(val => { inflightMap.delete(key); if (val != null) cache.set(key, val); return val; }, err => { inflightMap.delete(key); throw err; });
     inflightMap.set(key, p);
     return p;
 }
@@ -349,13 +312,7 @@ function getSharedCached(key, fn, ttl) {
         const val = await fn();
         if (val != null) sharedCacheSet(key, val, ttl);
         return val;
-    })().then(val => {
-        sharedInflight.delete(key);
-        return val;
-    }, err => {
-        sharedInflight.delete(key);
-        throw err;
-    });
+    })().then(val => { sharedInflight.delete(key); return val; }, err => { sharedInflight.delete(key); throw err; });
     sharedInflight.set(key, p);
     return p;
 }
@@ -376,13 +333,9 @@ async function withRetry(fn, attempts = 2, delay = 300) {
 }
 
 const PROXY_PARAM_MAP = new Map(ACTIVE_SOURCES.map(cfg => [cfg.proxyParam, cfg]));
-
 const withTimeout = (promise, ms) => {
     let t;
-    return Promise.race([
-        promise.then(v => { clearTimeout(t); return v; }),
-        new Promise(r => { t = setTimeout(() => r(null), ms); }),
-    ]);
+    return Promise.race([promise.then(v => { clearTimeout(t); return v; }), new Promise(r => { t = setTimeout(() => r(null), ms); })]);
 };
 
 async function fetchUpstream(url, extraHeaders = {}, timeoutMs = 30000) {
@@ -439,8 +392,7 @@ function rewriteM3u8KeyOnly(body, url, extraParam, absoluteBase) {
             });
         } else {
             const normalized = _processUri(t, dir, originBase);
-            const unwrapped = _unwrapProxyUrl(normalized);
-            out[i] = unwrapped;
+            out[i] = _unwrapProxyUrl(normalized);
         }
     }
     return out.join('\n');
@@ -478,18 +430,18 @@ function rewriteM3u8(body, url, extraParam, absoluteBase) {
 function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBase) {
     const mod = SOURCE_MODULES[cfg.key];
     const effectiveBase = getEffectiveBase(absoluteBase);
-    const audio = (cfg.key === 'tryembed-dub' || cfg.key === 'vidnest-dub') ? 'dub' : 'sub';
+    const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
 
     if (cfg.skipCache) {
         return withTimeout(jitter(cfg.jitter).then(() =>
-            withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 300)
+            withRetry(() => mod.getStream({ id, s, e, clientIP, absoluteBase: effectiveBase, audio, config: cfg }), cfg.retries, 300)
         ), cfg.timeout);
     }
 
     if (cfg.multiBase) {
         return withTimeout(jitter(cfg.jitter).then(async () => {
             for (const base of mod.BASES) {
-                const res = await getSharedCached(`${cfg.key}-${base}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, base, clientIP, audio), cfg.retries, 300));
+                const res = await getSharedCached(`${cfg.key}-${base}-${cacheKey}`, () => withRetry(() => mod.getStream({ id, s, e, clientIP, absoluteBase: base, audio, config: cfg }), cfg.retries, 300));
                 if (res) return res;
             }
             return null;
@@ -499,13 +451,13 @@ function fetchSource(cfg, cacheKey, id, s, e, clientIP, absoluteBase, fallbackBa
     const primaryTimeout = fallbackBase ? Math.floor(cfg.timeout * 0.6) : cfg.timeout;
     return withTimeout(jitter(cfg.jitter).then(async () => {
         const primary = await withTimeout(
-            getSharedCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, effectiveBase, audio), cfg.retries, 300)),
+            getSharedCached(`${cfg.key}-${cacheKey}`, () => withRetry(() => mod.getStream({ id, s, e, clientIP, absoluteBase: effectiveBase, audio, config: cfg }), cfg.retries, 300)),
             primaryTimeout
         );
         if (primary) return primary;
         if (!fallbackBase) return null;
         return withTimeout(
-            getSharedCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream(id, s, e, clientIP, fallbackBase, audio), cfg.retries, 300)),
+            getSharedCached(`${cfg.key}-fallback-${cacheKey}`, () => withRetry(() => mod.getStream({ id, s, e, clientIP, absoluteBase: fallbackBase, audio, config: cfg }), cfg.retries, 300)),
             cfg.timeout - primaryTimeout
         );
     }), cfg.timeout);
@@ -525,23 +477,23 @@ function wrapUrl(rawUrl, sourceKey, absoluteBase = '') {
 }
 
 function applyCdnHeaders(cleanUrl, extraHeaders, sourceKey) {
-    const mod = SOURCE_MODULES[sourceKey];
-    if (!mod?.CDN_HEADERS) return;
-    for (const rule of mod.CDN_HEADERS) {
+    const cfg = SOURCE_MAP[sourceKey];
+    if (!cfg?.cdnHeaders) return;
+    for (const rule of cfg.cdnHeaders) {
         if (rule.pattern.test(cleanUrl)) { Object.assign(extraHeaders, rule.headers); return; }
     }
 }
 
 async function verifyStream(rawUrl, sourceKey) {
-    const mod = SOURCE_MODULES[sourceKey];
-    if (mod.SKIP_VERIFY) return true;
+    const cfg = SOURCE_MAP[sourceKey];
+    if (cfg?.skipVerify) return true;
     const cacheKey = `vstream-${rawUrl}`;
     const cached = hlsVerifyCache.get(cacheKey);
     if (cached !== undefined) return cached;
     try {
         const res = await _originalFetch(rawUrl, {
             method: 'HEAD',
-            headers: { 'User-Agent': getUA(), ...(mod.VERIFY_HEADERS || {}) },
+            headers: { 'User-Agent': getUA(), ...(cfg?.verifyHeaders || {}) },
             redirect: 'follow',
             signal: AbortSignal.timeout(6000),
         });
@@ -566,30 +518,24 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
         } catch { }
         skipProxyCheck = true;
     }
-
     const cached = hlsVerifyCache.get(proxiedUrl);
     if (cached !== undefined) return cached;
-
     const store = val => { hlsVerifyCache.set(proxiedUrl, val); return val; };
     const fail = error => ({ ok: false, error });
-
     try {
         const m3u8Res = await _originalFetch(proxiedUrl, {
             signal: AbortSignal.timeout(12000),
             headers: extraHeaders['User-Agent'] ? extraHeaders : { 'User-Agent': getUA(), ...extraHeaders },
         });
-
         if (!m3u8Res.ok) {
             const val = fail(`m3u8 failed: ${m3u8Res.status}`);
             if (m3u8Res.status !== 429) store(val);
             return val;
         }
-
         const text = await m3u8Res.text();
         if (!text.trim().startsWith('#EXTM3U')) return fail('invalid m3u8');
         if (/^429$|^429\s/m.test(text) || text.includes('Too Many Requests')) return fail('Proxy Blocked or Invalid Hash');
         if (!text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) return fail('empty playlist');
-
         if (!skipProxyCheck) {
             let nextUrl = null;
             for (const l of text.split('\n')) {
@@ -616,7 +562,6 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
                 }
             }
         }
-
         return store({ ok: true, error: null });
     } catch (err) {
         return fail(err.message);
@@ -625,27 +570,12 @@ async function verifyPlayable(proxiedUrl, extraHeaders = {}, skipProxyCheck = fa
 
 async function getMetadata(id, s, e) {
     const cacheKey = `meta-${id}-${s || ''}-${e || ''}`;
-
     return getSharedCached(cacheKey, async () => {
         const k = process.env.TMDB_API_KEY;
-
-        if (!k) {
-            return { error: 'TMDB API key not configured' };
-        }
-
-        const url = s
-            ? `https://api.themoviedb.org/3/tv/${id}/season/${s}/episode/${e || 1}?api_key=${k}`
-            : `https://api.themoviedb.org/3/movie/${id}?api_key=${k}`;
-
-        const res = await _originalFetch(url, {
-            signal: AbortSignal.timeout(5000)
-        });
-
-        if (!res.ok) {
-            res.body?.cancel();
-            return { error: `TMDB API error: ${res.status}` };
-        }
-
+        if (!k) return { error: 'TMDB API key not configured' };
+        const url = s ? `https://api.themoviedb.org/3/tv/${id}/season/${s}/episode/${e || 1}?api_key=${k}` : `https://api.themoviedb.org/3/movie/${id}?api_key=${k}`;
+        const res = await _originalFetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) { res.body?.cancel(); return { error: `TMDB API error: ${res.status}` }; }
         return res.json();
     }, 1800000);
 }
@@ -663,10 +593,7 @@ function runTestQueue() {
 }
 
 async function acquireTestSlot() {
-    if (globalTestConcurrency < MAX_GLOBAL_TEST_CONCURRENCY) {
-        globalTestConcurrency++;
-        return;
-    }
+    if (globalTestConcurrency < MAX_GLOBAL_TEST_CONCURRENCY) { globalTestConcurrency++; return; }
     await new Promise(resolve => testQueue.push({ resolve }));
 }
 
@@ -690,29 +617,19 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
     if (cfg?.disabled) return respond(false, null, null, 'source disabled');
 
     const cacheKey = `test-${sourceKey}-${id}-${s || ''}-${e || ''}`;
-
     const localCached = testResultCache.get(cacheKey);
     if (localCached !== undefined) return respond(localCached.ok, localCached.url, localCached.raw_url, localCached.error);
-
     const shared = await sharedCacheGet(cacheKey);
-    if (shared !== undefined) {
-        testResultCache.set(cacheKey, shared);
-        return respond(shared.ok, shared.url, shared.raw_url, shared.error);
-    }
+    if (shared !== undefined) { testResultCache.set(cacheKey, shared); return respond(shared.ok, shared.url, shared.raw_url, shared.error); }
 
     const inflightKey = `inflight-${cacheKey}`;
     const existingInflight = sharedInflight.get(inflightKey);
     if (existingInflight) {
-        try {
-            const result = await existingInflight;
-            return respond(result?.ok ?? false, result?.url ?? null, result?.raw_url ?? null, result?.error ?? null);
-        } catch {
-            return respond(false, null, null, 'deduped request failed');
-        }
+        try { const result = await existingInflight; return respond(result?.ok ?? false, result?.url ?? null, result?.raw_url ?? null, result?.error ?? null); }
+        catch { return respond(false, null, null, 'deduped request failed'); }
     }
 
     await acquireTestSlot();
-
     const testPromise = (async () => {
         try {
             let rawResult = null, fetchError = null;
@@ -720,11 +637,11 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                 rawResult = await fetchSource(cfg, `${id}-${s || ''}-${e || ''}`, id, s, e, clientIP, absoluteBase, isFallbackNeeded(host) ? getNextFallbackBase() : '');
                 if (!rawResult) {
                     const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-                    rawResult = await withTimeout(mod.getStream(id, s, e, null, getEffectiveBase(absoluteBase), audio), 20000);
+                    rawResult = await withTimeout(mod.getStream({ id, s, e, clientIP: null, absoluteBase: getEffectiveBase(absoluteBase), audio, config: cfg }), 20000);
                 }
                 if (!rawResult && isFallbackNeeded(host)) {
                     const audio = /dub$/.test(cfg.key) ? 'dub' : 'sub';
-                    rawResult = await withTimeout(mod.getStream(id, s, e, null, getNextFallbackBase(), audio), 20000);
+                    rawResult = await withTimeout(mod.getStream({ id, s, e, clientIP: null, absoluteBase: getNextFallbackBase(), audio, config: cfg }), 20000);
                 }
             } catch (err) { fetchError = err.message; }
 
@@ -736,20 +653,13 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
             for (const candidate of candidates) {
                 const wrappedUrl = wrapUrl(candidate, sourceKey, absoluteBase);
                 if (!wrappedUrl) continue;
-
                 if (candidate?.skipProxy) {
                     const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                    testResultCache.set(cacheKey, result);
-                    sharedCacheSet(cacheKey, result, 90000);
-                    return result;
+                    testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); return result;
                 }
-
                 if (candidate?.skipHlsCheck) {
                     try {
-                        const r = await _originalFetch(candidate.url, {
-                            signal: AbortSignal.timeout(8000),
-                            headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) },
-                        });
+                        const r = await _originalFetch(candidate.url, { signal: AbortSignal.timeout(8000), headers: { 'User-Agent': getUA(), ...(candidate.headers || {}) } });
                         if (!r.ok) continue;
                         const ct = (r.headers.get('content-type') || '').toLowerCase();
                         const text = ct.includes('video') || ct.includes('octet-stream') ? null : await r.text();
@@ -757,22 +667,16 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                         if (text !== null && /Too Many Requests/m.test(text)) continue;
                         if (text !== null && !text.includes('#EXTINF') && !text.includes('#EXT-X-STREAM-INF')) continue;
                         const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                        testResultCache.set(cacheKey, result);
-                        sharedCacheSet(cacheKey, result, 90000);
-                        return result;
+                        testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); return result;
                     } catch { continue; }
                 }
-
-                if (mod.SKIP_VERIFY || mod.MULTI_URL) {
+                if (cfg.skipVerify || cfg.multiUrl) {
                     const checkUrl = IS_HF ? candidate.url : wrappedUrl;
                     const checkHeaders = IS_HF ? (candidate.headers || {}) : {};
                     const playableCheck = await verifyPlayable(checkUrl, checkHeaders, true);
                     if (playableCheck.ok || /timeout|aborted/.test(playableCheck.error)) {
                         const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                        if (!rawResult?.skipCache) {
-                            testResultCache.set(cacheKey, result);
-                            sharedCacheSet(cacheKey, result, 90000);
-                        }
+                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); }
                         return result;
                     }
                     try {
@@ -781,9 +685,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                         const ct = (headRes.headers.get('content-type') || '').toLowerCase();
                         if (headRes.status < 400 && /video|octet-stream|mp4/.test(ct)) {
                             const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                            testResultCache.set(cacheKey, result);
-                            sharedCacheSet(cacheKey, result, 90000);
-                            return result;
+                            testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); return result;
                         }
                     } catch { }
                 } else {
@@ -800,21 +702,13 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                         return { ok: false, url: null, raw_url: candidate.url, error: playableCheck.error, debug: { proxy_failed: true, proxy_error: playableCheck.error, proxy_body_preview: proxiedBody, raw_reachable: rawCheck.ok, raw_error: rawCheck.error, raw_headers_used: rawHeaders, proxied_url: wrappedUrl } };
                     }
                     const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                    testResultCache.set(cacheKey, result);
-                    sharedCacheSet(cacheKey, result, 90000);
-                    return result;
+                    testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 90000); return result;
                 }
             }
-
             return { ok: false, url: null, raw_url: candidates[0]?.url || null, error: fetchError };
-        } finally {
-            releaseTestSlot();
-            sharedInflight.delete(inflightKey);
-        }
+        } finally { releaseTestSlot(); sharedInflight.delete(inflightKey); }
     })();
-
     sharedInflight.set(inflightKey, testPromise);
-
     const result = await testPromise;
     return respond(result?.ok ?? false, result?.url ?? null, result?.raw_url ?? null, result?.error ?? null, result?.debug ?? null);
 }
@@ -828,19 +722,12 @@ const CORS_HEADERS = {
 };
 
 const JSON_CORS = { 'Content-Type': 'application/json', ...CORS_HEADERS };
-const respondJson = (status, data, extraHeaders) => ({
-    status,
-    body: JSON.stringify(data),
-    headers: extraHeaders ? { ...JSON_CORS, ...extraHeaders } : JSON_CORS,
-});
+const respondJson = (status, data, extraHeaders) => ({ status, body: JSON.stringify(data), headers: extraHeaders ? { ...JSON_CORS, ...extraHeaders } : JSON_CORS });
 
 const ROUTE_TESTS = {
-    subtitle_movie: /^\/(?:api\/)?subtitles?\/movie\/([^/]+)$/,
-    subtitle_tv: /^\/(?:api\/)?subtitles?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
-    debug: /^\/(?:api\/)?debug\/([^/]+)$/,
-    test: /^\/(?:api\/)?test\/([^/]+)$/,
-    download_movie: /^\/(?:api\/)?downloads?\/movie\/([^/]+)$/,
-    download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
+    subtitle_movie: /^\/(?:api\/)?subtitles?\/movie\/([^/]+)$/, subtitle_tv: /^\/(?:api\/)?subtitles?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
+    debug: /^\/(?:api\/)?debug\/([^/]+)$/, test: /^\/(?:api\/)?test\/([^/]+)$/,
+    download_movie: /^\/(?:api\/)?downloads?\/movie\/([^/]+)$/, download_tv: /^\/(?:api\/)?downloads?\/tv\/([^/]+)\/([^/]+)\/([^/]+)$/,
 };
 
 const EARLY_CLOSE_MS = IS_HF ? 20000 : 14000;
@@ -850,16 +737,9 @@ async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
     const host = absoluteBase.replace('http://', '').replace('https://', '');
     const debugResults = [];
     let closed = false;
-
     const onClose = () => { closed = true; };
-    res.on('close', onClose);
-    res.on('error', onClose);
-
-    const safeWrite = (data) => {
-        if (closed || res.writableEnded || res.destroyed) return false;
-        try { res.write(data); return true; } catch { closed = true; return false; }
-    };
-
+    res.on('close', onClose); res.on('error', onClose);
+    const safeWrite = (data) => { if (closed || res.writableEnded || res.destroyed) return false; try { res.write(data); return true; } catch { closed = true; return false; } };
     const promises = sources.map(async (cfg) => {
         if (closed) return;
         try {
@@ -871,37 +751,25 @@ async function streamSources(sources, id, s, e, clientIP, absoluteBase, res) {
                 sent.add(parsed.url);
                 safeWrite(`data: ${JSON.stringify({ type: 'source', source: { source: cfg.key, label: cfg.label ?? cfg.key, url: parsed.url } })}\n\n`);
             }
-        } catch (err) {
-            debugResults.push({ source: cfg.key, ok: false, error: err.message });
-        }
+        } catch (err) { debugResults.push({ source: cfg.key, ok: false, error: err.message }); }
     });
-
-    await Promise.race([
-        Promise.all(promises),
-        new Promise(r => setTimeout(r, EARLY_CLOSE_MS))
-    ]);
-
+    await Promise.race([Promise.all(promises), new Promise(r => setTimeout(r, EARLY_CLOSE_MS))]);
     safeWrite(`data: ${JSON.stringify({ type: 'debug', results: debugResults })}\n\n`);
     return sent.size;
 }
 
 const rateLimitCleanupInterval = setInterval(() => {
     const now = Date.now();
-    for (const [ip, rl] of rateLimitMap) {
-        if (now - rl.ts > 60000) rateLimitMap.delete(ip);
-    }
+    for (const [ip, rl] of rateLimitMap) { if (now - rl.ts > 60000) rateLimitMap.delete(ip); }
 }, 30000);
-
 rateLimitCleanupInterval.unref?.();
 
 const FALLBACK_SUB_BASES = ['https://subs.vidsrc.cc', 'https://vidsrc.cc', 'https://api.vidsrc.cc'];
-
 async function getFastSubs(id, s, e) {
     const bases = [...new Set([...(SUBTITLE_BASES || []), ...FALLBACK_SUB_BASES])].filter(Boolean);
     const paths = s ? [`/tv/${id}/${s}/${e}`, `/tv/tt${id}/${s}/${e}`] : [`/movie/${id}`, `/movie/tt${id}`];
     const urls = [];
     for (const b of bases) for (const p of paths) urls.push(`${b}${p}`);
-
     try {
         return await Promise.any(urls.map(async u => {
             const r = await _originalFetch(u, { signal: AbortSignal.timeout(4000) });
@@ -910,9 +778,7 @@ async function getFastSubs(id, s, e) {
             if (Array.isArray(data) && data.length > 0) return data;
             throw new Error();
         }));
-    } catch {
-        return [];
-    }
+    } catch { return []; }
 }
 
 async function handleRequest(req, res) {
@@ -932,22 +798,11 @@ async function handleRequest(req, res) {
 
     if (req.method === 'OPTIONS') return { status: 204, body: '', headers: CORS_HEADERS };
 
-    if (pathname === '/' || pathname === '') {
-        return {
-            status: 200,
-            body: `${LOGO_TEXT}\n\ndeveloped_by: @vyla-entertainment\ngithub: https://github.com/vyla-entertainment\ndocs: https://vyla.mintlify.app\ndmca: https://vyla.mintlify.app/misc/dmca`,
-            headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS }
-        };
-    }
+    if (pathname === '/' || pathname === '') return { status: 200, body: `${LOGO_TEXT}\n\ndeveloped_by: @vyla-entertainment\ngithub: https://github.com/vyla-entertainment\ndocs: https://vyla.mintlify.app\ndmca: https://vyla.mintlify.app/misc/dmca`, headers: { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS } };
 
     if (pathname === '/test' || pathname === '/api/test') {
         const tests = {};
-        ACTIVE_SOURCES.forEach(s => {
-            tests[s.key] = {
-                movie: `/api/test/155?source=${s.key}`,
-                tv: `/api/test/1396?season=1&episode=1&source=${s.key}`
-            };
-        });
+        ACTIVE_SOURCES.forEach(s => { tests[s.key] = { movie: `/api/test/155?source=${s.key}`, tv: `/api/test/1396?season=1&episode=1&source=${s.key}` }; });
         return respondJson(200, tests);
     }
 
@@ -960,28 +815,14 @@ async function handleRequest(req, res) {
         const id = searchParams.get('id');
         if (!id) return respondJson(400, { error: 'missing id', route: '/movie?id=:tmdb_id', example: '/movie?id=155' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
-
-        const [meta, subtitles] = await Promise.all([
-            getMetadata(id, null, null),
-            getFastSubs(id, null, null),
-        ]);
-
-        if (!res.writableEnded && !res.destroyed) {
-            try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; }
-        }
-
+        const [meta, subtitles] = await Promise.all([getMetadata(id, null, null), getFastSubs(id, null, null)]);
+        if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; } }
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
-        const sourcesToUse = requestedSources.length
-            ? ACTIVE_SOURCES.filter(s => requestedSources.includes(s.key))
-            : ACTIVE_SOURCES;
+        const sourcesToUse = requestedSources.length ? ACTIVE_SOURCES.filter(s => requestedSources.includes(s.key)) : ACTIVE_SOURCES;
         posthogTrack('stream-movie', { id, ...getRequestMeta(req, reqUrl) }, clientIP);
         const total = await streamSources(sourcesToUse, id, null, null, clientIP, absoluteBase, res);
-        if (!res.writableEnded && !res.destroyed) {
-            try { res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`); } catch { }
-            try { res.end(); } catch { }
-        }
+        if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`); res.end(); } catch { } }
         return null;
     }
 
@@ -989,61 +830,24 @@ async function handleRequest(req, res) {
         const id = searchParams.get('id'), s = searchParams.get('season'), e = searchParams.get('episode');
         if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: '/tv?id=:id&season=:s&episode=:e', example: '/tv?id=1396&season=1&episode=1' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
-
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
-
-        const [meta, subtitles] = await Promise.all([
-            getMetadata(id, s, e),
-            getFastSubs(id, s, e),
-        ]);
-
-        if (!res.writableEnded && !res.destroyed) {
-            try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; }
-        }
-
+        const [meta, subtitles] = await Promise.all([getMetadata(id, s, e), getFastSubs(id, s, e)]);
+        if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; } }
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
-        const sourcesToUse = requestedSources.length
-            ? ACTIVE_SOURCES.filter(src => requestedSources.includes(src.key))
-            : ACTIVE_SOURCES;
+        const sourcesToUse = requestedSources.length ? ACTIVE_SOURCES.filter(src => requestedSources.includes(src.key)) : ACTIVE_SOURCES;
         posthogTrack('stream-tv', { id, season: s, episode: e, ...getRequestMeta(req, reqUrl) }, clientIP);
         const total = await streamSources(sourcesToUse, id, s, e, clientIP, absoluteBase, res);
-        if (!res.writableEnded && !res.destroyed) {
-            try { res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`); } catch { }
-            try { res.end(); } catch { }
-        }
+        if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'done', total })}\n\n`); res.end(); } catch { } }
         return null;
     }
 
-    if (pathname === '/subtitle' || pathname === '/subtitles' || pathname === '/api/subtitle' || pathname === '/api/subtitles') {
-        return respondJson(200, {
-            routes: { movie: '/subtitles/movie/:id', tv: '/subtitles/tv/:id/:s/:e' },
-            examples: { movie: '/subtitles/movie/155', tv: '/subtitles/tv/1396/1/1' }
-        });
-    }
-
-    if (pathname === '/download' || pathname === '/downloads' || pathname === '/api/download' || pathname === '/api/downloads') {
-        return respondJson(200, {
-            routes: { movie: '/downloads/movie/:id', tv: '/downloads/tv/:id/:s/:e' },
-            examples: { movie: '/downloads/movie/155', tv: '/downloads/tv/1396/1/1' }
-        });
-    }
+    if (pathname === '/subtitle' || pathname === '/subtitles' || pathname === '/api/subtitle' || pathname === '/api/subtitles') return respondJson(200, { routes: { movie: '/subtitles/movie/:id', tv: '/subtitles/tv/:id/:s/:e' }, examples: { movie: '/subtitles/movie/155', tv: '/subtitles/tv/1396/1/1' } });
+    if (pathname === '/download' || pathname === '/downloads' || pathname === '/api/download' || pathname === '/api/downloads') return respondJson(200, { routes: { movie: '/downloads/movie/:id', tv: '/downloads/tv/:id/:s/:e' }, examples: { movie: '/downloads/movie/155', tv: '/downloads/tv/1396/1/1' } });
 
     let match = ROUTE_TESTS.subtitle_movie.exec(pathname);
-    if (match) {
-        posthogTrack('subtitles-movie', { id: match[1], ...getRequestMeta(req, reqUrl) });
-        const fastSubs = await getFastSubs(match[1], null, null);
-        if (fastSubs.length > 0) return respondJson(200, fastSubs);
-        return handleSubtitleMovie(match[1], CORS_HEADERS);
-    }
-
+    if (match) { posthogTrack('subtitles-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }); const fastSubs = await getFastSubs(match[1], null, null); if (fastSubs.length > 0) return respondJson(200, fastSubs); return handleSubtitleMovie(match[1], CORS_HEADERS); }
     match = ROUTE_TESTS.subtitle_tv.exec(pathname);
-    if (match) {
-        posthogTrack('subtitles-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) });
-        const fastSubs = await getFastSubs(match[1], match[2], match[3]);
-        if (fastSubs.length > 0) return respondJson(200, fastSubs);
-        return handleSubtitleTv(match[1], match[2], match[3], CORS_HEADERS);
-    }
-
+    if (match) { posthogTrack('subtitles-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) }); const fastSubs = await getFastSubs(match[1], match[2], match[3]); if (fastSubs.length > 0) return respondJson(200, fastSubs); return handleSubtitleTv(match[1], match[2], match[3], CORS_HEADERS); }
     match = ROUTE_TESTS.download_movie.exec(pathname);
     if (match) { posthogTrack('downloads-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }, clientIP); return handleDownloadMovie(match[1], CORS_HEADERS); }
     match = ROUTE_TESTS.download_tv.exec(pathname);
@@ -1060,30 +864,16 @@ async function handleRequest(req, res) {
 
     match = ROUTE_TESTS.debug.exec(pathname);
     if (match) {
-        const id = match[1];
-        const s = searchParams.get('season') || searchParams.get('s') || null;
-        const e = searchParams.get('episode') || searchParams.get('e') || null;
-        const sourceKey = searchParams.get('source');
+        const id = match[1], s = searchParams.get('season') || searchParams.get('s') || null, e = searchParams.get('episode') || searchParams.get('e') || null, sourceKey = searchParams.get('source');
         if (!sourceKey) return respondJson(400, { error: 'missing source' });
-        const mod = SOURCE_MODULES[sourceKey];
+        const mod = SOURCE_MODULES[sourceKey], cfg = SOURCE_MAP[sourceKey];
         if (!mod) return respondJson(400, { error: `unknown source: ${sourceKey}` });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         const t0 = Date.now();
         let streamResult = null, streamError = null;
         const fetchTrace = [];
-        const tracingFetch = async (url, opts) => {
-            const start = Date.now();
-            try {
-                const res = await _originalFetch(url, opts);
-                fetchTrace.push({ url: String(url).slice(0, 200), status: res.status, ok: res.ok, ms: Date.now() - start });
-                return res;
-            } catch (err) {
-                fetchTrace.push({ url: String(url).slice(0, 200), error: err.message, ms: Date.now() - start });
-                throw err;
-            }
-        };
+        const tracingFetch = async (url, opts) => { const start = Date.now(); try { const res = await _originalFetch(url, opts); fetchTrace.push({ url: String(url).slice(0, 200), status: res.status, ok: res.ok, ms: Date.now() - start }); return res; } catch (err) { fetchTrace.push({ url: String(url).slice(0, 200), error: err.message, ms: Date.now() - start }); throw err; } };
         const debugLock = new Map();
-
         try {
             const audio = /dub$/.test(sourceKey) ? 'dub' : 'sub';
             const lockKey = `${sourceKey}-${id}-${s}-${e}`;
@@ -1091,28 +881,19 @@ async function handleRequest(req, res) {
             const prev = globalThis.fetch;
             globalThis.fetch = tracingFetch;
             const release = new Promise(async resolve => {
-                try {
-                    streamResult = (await mod.getStream(id, s, e, null, absoluteBase, audio)) ??
-                        (await mod.getStream(id, s, e, null, isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '', audio));
-                } catch (err) { streamError = err.message; }
-                globalThis.fetch = prev;
-                resolve();
+                try { streamResult = (await mod.getStream({ id, s, e, clientIP: null, absoluteBase, audio, config: cfg })) ?? (await mod.getStream({ id, s, e, clientIP: null, absoluteBase: isFallbackNeeded(reqUrl.host) ? FALLBACK_BASE : '', audio, config: cfg })); } catch (err) { streamError = err.message; }
+                globalThis.fetch = prev; resolve();
             });
-            debugLock.set(lockKey, release);
-            await release;
-            debugLock.delete(lockKey);
+            debugLock.set(lockKey, release); await release; debugLock.delete(lockKey);
         } catch (err) { streamError = err.message; }
         const candidates = streamResult?.allUrls || (streamResult ? [streamResult] : []);
-
         const checks = await Promise.all(candidates.slice(0, 3).map(async (raw, i) => {
             const rawUrl = typeof raw === 'object' ? raw.url : raw;
             const rawHeaders = (typeof raw === 'object' && raw.headers) ? raw.headers : {};
             const wrappedUrl = wrapUrl(typeof raw === 'object' ? raw : { url: raw }, sourceKey, absoluteBase);
             let m3u8Preview = null, mp4Preview = null, playable_check = null;
             try {
-                if (raw?.skipProxy) {
-                    return { index: i, raw_url: rawUrl, proxy_url: rawUrl, playable_check: { ok: true, error: null }, m3u8_preview: 'skipped: direct client playback', mp4_preview: null };
-                }
+                if (raw?.skipProxy) return { index: i, raw_url: rawUrl, proxy_url: rawUrl, playable_check: { ok: true, error: null }, m3u8_preview: 'skipped: direct client playback', mp4_preview: null };
                 const fetchUrl = wrappedUrl || rawUrl;
                 const fetchHeaders = wrappedUrl ? { 'User-Agent': getUA() } : { 'User-Agent': getUA(), ...rawHeaders };
                 const r = await _originalFetch(fetchUrl, { signal: AbortSignal.timeout(15000), headers: { ...fetchHeaders, 'Range': 'bytes=0-511' } });
@@ -1129,7 +910,6 @@ async function handleRequest(req, res) {
             } catch (err) { playable_check = { ok: false, error: err.message }; }
             return { index: i, raw_url: rawUrl, proxy_url: wrappedUrl, playable_check, m3u8_preview: m3u8Preview, mp4_preview: mp4Preview };
         }));
-
         return respondJson(200, { source: sourceKey, id, candidates: candidates.length, checks, elapsed_ms: Date.now() - t0, stream_error: streamError, fetch_trace: fetchTrace, got_result: streamResult !== null, result_keys: streamResult ? Object.keys(streamResult) : null });
     }
 
@@ -1144,14 +924,9 @@ async function handleRequest(req, res) {
                 if (proxyHeaders) try { Object.assign(extraHeaders, JSON.parse(safeDecode(proxyHeaders))); } catch { }
                 if (!extraHeaders['User-Agent'] && !extraHeaders['user-agent']) extraHeaders['User-Agent'] = getUA();
                 delete extraHeaders['Host'];
-
                 let matchedSource = null;
-                for (const [param, cfg] of PROXY_PARAM_MAP) {
-                    if (searchParams.has(param)) { matchedSource = cfg; break; }
-                }
-
+                for (const [param, cfg] of PROXY_PARAM_MAP) { if (searchParams.has(param)) { matchedSource = cfg; break; } }
                 let cleanUrl = url;
-
                 if (matchedSource) {
                     const isVodvidl = /vodvidl\.site|vidldl\.site|vidldr\.site/i.test(url);
                     if (!isVodvidl) {
@@ -1166,41 +941,28 @@ async function handleRequest(req, res) {
                     }
                     applyCdnHeaders(isVodvidl ? url : cleanUrl, extraHeaders, matchedSource.key);
                 }
-
                 const upstream = await fetchUpstream(cleanUrl, extraHeaders, 30000);
                 const ct = (upstream.headers.get('content-type') || '').toLowerCase();
                 const looksLikeM3u8 = M3U8_REGEX.test(cleanUrl) || cleanUrl.includes('/playlist/') || cleanUrl.includes('/streamsvr/') || ct.includes('mpegurl') || ct.includes('m3u8');
-
                 if (looksLikeM3u8) {
                     const text = await upstream.text();
                     if (text.trim().startsWith('#EXT') || /megacloud\.animanga\.fun\/(ts-proxy|proxy)/i.test(text.slice(0, 200))) {
                         const absoluteBase = getAbsoluteBase(reqUrl.host);
                         const isTesub = matchedSource?.proxyParam === 'tesub';
-                        const rewritten = isTesub
-                            ? rewriteM3u8KeyOnly(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase)
-                            : matchedSource
-                                ? rewriteM3u8(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase)
-                                : rewriteM3u8(text, url, '&vn=1', absoluteBase);
+                        const rewritten = isTesub ? rewriteM3u8KeyOnly(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase) : matchedSource ? rewriteM3u8(text, cleanUrl, `&${matchedSource.proxyParam}=1&proxyHeaders=${encodeURIComponent(JSON.stringify(extraHeaders))}`, absoluteBase) : rewriteM3u8(text, url, '&vn=1', absoluteBase);
                         return { status: 200, body: rewritten, headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...CORS_HEADERS } };
                     }
                     return { status: 502, body: `expected m3u8 but got: ${text.slice(0, 100)}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                 }
-
                 if (matchedSource) {
-                    const isTikTok = TIKTOK_REGEX.test(cleanUrl);
-                    const isMkv = cleanUrl.includes('.mkv') || ct.includes('matroska');
-                    const isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl) || /letsgocdn\d+\.shop/i.test(cleanUrl);
-                    const needsStrip = searchParams.has('tt') || STRIP_REGEX.test(cleanUrl);
-
+                    const isTikTok = TIKTOK_REGEX.test(cleanUrl), isMkv = cleanUrl.includes('.mkv') || ct.includes('matroska'), isPngMasked = ct === 'image/png' || ct === 'image/jpeg' || /\.png(\?|$)/i.test(cleanUrl) || /letsgocdn\d+\.shop/i.test(cleanUrl), needsStrip = searchParams.has('tt') || STRIP_REGEX.test(cleanUrl);
                     if (isTikTok || isPngMasked || needsStrip) {
                         if (!upstream.ok) return { status: upstream.status, body: `upstream ${upstream.status}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
                         const full = Buffer.from(await upstream.arrayBuffer());
                         const stripped = (full[0] === 0x89 || full[0] === 0xFF || full[0] === 0x00) ? full.subarray(120) : full;
                         return { status: 200, body: stripped, headers: { 'Content-Type': 'video/MP2T', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' } };
                     }
-
                     if (!upstream.ok) return { status: upstream.status, body: `upstream ${upstream.status}`, headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' } };
-
                     const rangeHeader = req.headers['range'];
                     const streamUpstream = rangeHeader ? await _originalFetch(cleanUrl, { headers: { 'User-Agent': getUA(), ...extraHeaders, 'Range': rangeHeader }, redirect: 'follow' }) : upstream;
                     const responseHeaders = { 'Content-Type': isMkv || ct === 'application/octet-stream' ? 'video/mp4' : (ct || 'video/mp4'), 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
@@ -1208,29 +970,19 @@ async function handleRequest(req, res) {
                     if (streamUpstream.headers.has('content-range')) responseHeaders['Content-Range'] = streamUpstream.headers.get('content-range');
                     return { status: rangeHeader && streamUpstream.status === 206 ? 206 : 200, stream: streamUpstream.body, headers: responseHeaders };
                 }
-
                 const full = Buffer.from(await upstream.arrayBuffer());
                 const needsStrip = searchParams.has('tt') || TIKTOK_REGEX.test(url) || STRIP_REGEX.test(url);
                 const stripped = (needsStrip && (full[0] === 0x89 || full[0] === 0xFF || full[0] === 0x00)) ? full.subarray(120) : full;
                 return { status: 200, body: stripped, headers: { 'Content-Type': 'video/MP2T', ...CORS_HEADERS, 'Cache-Control': 'public, max-age=3600' } };
             } catch (e) { return respondJson(502, { error: e.message }); }
         }
-
         if (searchParams.has('sources_meta')) return respondJson(200, { sources: ACTIVE_SOURCES.map(c => ({ key: c.key, label: c.label, timeout: c.timeout })) });
-
         if (searchParams.has('tmdb_movie') || searchParams.has('tmdb_tv') || searchParams.has('tmdb_show') || searchParams.has('tmdb_season')) {
             const k = process.env.TMDB_API_KEY;
             if (!k) return respondJson(500, { error: 'no key' });
             const id = searchParams.get('id'), s = searchParams.get('s');
-            const tmdbUrl = searchParams.has('tmdb_season')
-                ? `https://api.themoviedb.org/3/tv/${id}/season/${s}?api_key=${k}`
-                : searchParams.has('tmdb_movie')
-                    ? `https://api.themoviedb.org/3/movie/${id}?api_key=${k}${searchParams.has('append_to_response') ? `&append_to_response=${searchParams.get('append_to_response')}` : ''}`
-                    : `https://api.themoviedb.org/3/tv/${id}?api_key=${k}`;
-            try {
-                const r = await _originalFetch(tmdbUrl);
-                return respondJson(200, await r.json());
-            } catch (err) { return respondJson(500, { error: err.message }); }
+            const tmdbUrl = searchParams.has('tmdb_season') ? `https://api.themoviedb.org/3/tv/${id}/season/${s}?api_key=${k}` : searchParams.has('tmdb_movie') ? `https://api.themoviedb.org/3/movie/${id}?api_key=${k}${searchParams.has('append_to_response') ? `&append_to_response=${searchParams.get('append_to_response')}` : ''}` : `https://api.themoviedb.org/3/tv/${id}?api_key=${k}`;
+            try { const r = await _originalFetch(tmdbUrl); return respondJson(200, await r.json()); } catch (err) { return respondJson(500, { error: err.message }); }
         }
         return respondJson(400, { error: 'missing parameters' });
     }
@@ -1271,7 +1023,6 @@ async function handleRequest(req, res) {
             return respondJson(200, { upstream_status: res.status, upstream_ct: res.headers.get('content-type'), redirect_location: res.headers.get('location'), body_length: bytes.length, first_32_bytes_hex: Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '), first_byte: bytes[0], request_headers_sent: extraHeaders });
         } catch (err) { return respondJson(200, { error: err.message, request_headers_sent: extraHeaders }); }
     }
-
     return respondJson(404, { error: 'not found' });
 }
 
@@ -1292,15 +1043,10 @@ const server = http.createServer(async (req, res) => {
             readable.on('error', () => { try { res.destroy(); } catch { } });
             res.on('error', () => { try { readable.destroy(); } catch { } });
             readable.pipe(res);
-        } else {
-            res.end(result.body ?? '');
-        }
+        } else res.end(result.body ?? '');
     } catch (err) {
         if (!res.headersSent) {
-            try {
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end('{"error":"internal server error"}');
-            } catch { }
+            try { res.writeHead(500, { 'Content-Type': 'application/json' }); res.end('{"error":"internal server error"}'); } catch { }
         }
     }
 });
@@ -1310,8 +1056,5 @@ server.headersTimeout = 70000;
 server.maxHeadersCount = 100;
 server.timeout = 90000;
 
-server.on('error', (err) => {
-    if (err.code !== 'EADDRINUSE') console.error('server error', err.message);
-});
-
+server.on('error', (err) => { if (err.code !== 'EADDRINUSE') console.error('server error', err.message); });
 server.listen(PORT, '0.0.0.0', () => console.log(`http://localhost:${PORT}`));

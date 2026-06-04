@@ -1,11 +1,6 @@
-'use strict';
-
 const API_BASE = 'https://api.meowtv.ru';
 const REFERER = 'https://meowtv.ru';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36';
-
-export const SKIP_VERIFY = true;
-export const VERIFY_HEADERS = { 'User-Agent': UA, 'Referer': REFERER, 'Origin': REFERER };
 
 const HEADERS = { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': REFERER, 'Origin': REFERER };
 const OUT_HEADERS = { 'User-Agent': UA, 'Referer': REFERER, 'Origin': REFERER };
@@ -34,11 +29,7 @@ async function decrypt(payload) {
 }
 
 async function apiFetch(path, opts = {}) {
-    const res = await fetch(`${API_BASE}${path}`, {
-        headers: HEADERS,
-        signal: AbortSignal.timeout(10000),
-        ...opts,
-    });
+    const res = await fetch(`${API_BASE}${path}`, { headers: HEADERS, signal: AbortSignal.timeout(10000), ...opts });
     if (!res.ok) { res.body?.cancel(); return null; }
     return res.json();
 }
@@ -50,64 +41,36 @@ const TICKET_TTL = 55000;
 async function getTicket() {
     const now = Date.now();
     if (_ticketPromise && now < _ticketExpiry) return _ticketPromise;
-
     _ticketExpiry = now + TICKET_TTL;
     _ticketPromise = (async () => {
         const challenge = await apiFetch('/altcha/challenge', { method: 'GET' });
         if (!challenge) return null;
-
-        const number = await solveAltcha(
-            challenge.challenge,
-            challenge.salt,
-            challenge.algorithm,
-            challenge.maxnumber
-        );
+        const number = await solveAltcha(challenge.challenge, challenge.salt, challenge.algorithm, challenge.maxnumber);
         if (number === null) return null;
-
-        const altcha = btoa(JSON.stringify({
-            algorithm: challenge.algorithm,
-            challenge: challenge.challenge,
-            number,
-            salt: challenge.salt,
-            signature: challenge.signature,
-        }));
-
-        const data = await apiFetch('/streams/ticket', {
-            method: 'POST',
-            headers: { ...HEADERS, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ altcha }),
-        });
+        const altcha = btoa(JSON.stringify({ algorithm: challenge.algorithm, challenge: challenge.challenge, number, salt: challenge.salt, signature: challenge.signature }));
+        const data = await apiFetch('/streams/ticket', { method: 'POST', headers: { ...HEADERS, 'Content-Type': 'application/json' }, body: JSON.stringify({ altcha }) });
         return data?.ticket ?? null;
     })();
-
     _ticketPromise.catch(() => { _ticketPromise = null; _ticketExpiry = 0; });
     return _ticketPromise;
 }
 
 async function fetchStream(path, ticket) {
-    const payload = await apiFetch(path, {
-        headers: { ...HEADERS, 'x-stream-ticket': ticket },
-    });
+    const payload = await apiFetch(path, { headers: { ...HEADERS, 'x-stream-ticket': ticket } });
     if (!payload?.n || !payload?.d) return null;
     return decrypt(payload);
 }
 
-export async function getStream(id, s, e) {
+export async function getStream({ id, s, e }) {
     const ticket = await getTicket();
     if (!ticket) return null;
-
     const isTV = !!s;
     const servers = ['tik', 'nou', 'lux'];
-
     const serverResults = await Promise.allSettled(
         servers.map(async (server) => {
-            const path = isTV
-                ? `/streams/tv/${id}/${s}/${e}?s=${encodeURIComponent(server)}`
-                : `/streams/movie/${id}?s=${encodeURIComponent(server)}`;
-
+            const path = isTV ? `/streams/tv/${id}/${s}/${e}?s=${encodeURIComponent(server)}` : `/streams/movie/${id}?s=${encodeURIComponent(server)}`;
             const data = await fetchStream(path, ticket);
             if (!data) return null;
-
             const urls = [];
             if (typeof data?.url === 'string' && data.url.startsWith('http')) {
                 urls.push({ url: data.url, headers: { ...OUT_HEADERS, ...(data.headers || {}) } });
@@ -122,11 +85,7 @@ export async function getStream(id, s, e) {
             return urls.length ? urls : null;
         })
     );
-
-    const allUrls = serverResults
-        .filter(r => r.status === 'fulfilled' && r.value)
-        .flatMap(r => r.value);
-
+    const allUrls = serverResults.filter(r => r.status === 'fulfilled' && r.value).flatMap(r => r.value);
     if (!allUrls.length) return null;
     return { ...allUrls[0], allUrls };
 }

@@ -1,25 +1,9 @@
 const BASE_URL = 'https://vixsrc.to';
+const HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36', 'Accept': 'application/json, text/javascript, */*; q=0.01', 'Accept-Language': 'en-US,en;q=0.9', 'Referer': BASE_URL + '/', 'Origin': BASE_URL };
 
-const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150 Safari/537.36',
-    'Accept': 'application/json, text/javascript, */*; q=0.01',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': BASE_URL + '/',
-    'Origin': BASE_URL,
-};
-
-export const VERIFY_HEADERS = { ...HEADERS };
-export const SKIP_VERIFY = false;
-export const MULTI_URL = false;
-
-let _selfBase = null;
-export function setSelfBase(base) { _selfBase = base; }
-
-async function proxyFetch(url, asJson = false) {
-    const target = _selfBase
-        ? `${_selfBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}`
-        : url;
-    const fetchOpts = _selfBase ? {} : { headers: HEADERS };
+async function proxyFetch(url, asJson = false, absoluteBase = null) {
+    const target = absoluteBase ? `${absoluteBase}/api?url=${encodeURIComponent(url)}&proxyHeaders=${encodeURIComponent(JSON.stringify(HEADERS))}` : url;
+    const fetchOpts = absoluteBase ? {} : { headers: HEADERS };
     try {
         const res = await fetch(target, fetchOpts);
         if (!res || res.status !== 200) return null;
@@ -28,9 +12,7 @@ async function proxyFetch(url, asJson = false) {
             try { return JSON.parse(text); } catch { return null; }
         }
         return res.text();
-    } catch {
-        return null;
-    }
+    } catch { return null; }
 }
 
 function buildApiUrl(id, s, e) {
@@ -53,37 +35,6 @@ function buildMasterUrl({ token, expires, playlist, lang }) {
     return `${playlist}${sep}token=${token}&expires=${expires}&h=1&lang=${lang}`;
 }
 
-export async function getStream(id, s, e, clientIP = null, selfBase = null) {
-    if (selfBase) _selfBase = selfBase;
-    try {
-        const apiUrl = buildApiUrl(id, s, e);
-        const apiData = await proxyFetch(apiUrl, true);
-        if (!apiData?.src) return null;
-
-        const embedUrl = apiData.src.startsWith('http') ? apiData.src : BASE_URL + apiData.src;
-        const html = await proxyFetch(embedUrl, false);
-        if (!html) return null;
-
-        const tokenData = extractTokenData(html);
-        if (!tokenData) return null;
-
-        const masterUrl = buildMasterUrl(tokenData);
-
-        const playlistText = await proxyFetch(masterUrl, false);
-        if (!playlistText) return null;
-
-        const cleaned = playlistText.trim();
-        if (!cleaned.startsWith('#EXTM3U')) return null;
-
-        const variantUrl = getBestVariantUrl(cleaned, masterUrl);
-        const finalUrl = variantUrl ?? masterUrl;
-
-        return { url: finalUrl, headers: HEADERS, skipProxy: false };
-    } catch {
-        return null;
-    }
-}
-
 function getBestVariantUrl(content, masterUrl) {
     const lines = content.split('\n');
     let bestRes = 0;
@@ -102,4 +53,25 @@ function getBestVariantUrl(content, masterUrl) {
         }
     }
     return bestUrl;
+}
+
+export async function getStream({ id, s, e, absoluteBase }) {
+    try {
+        const apiUrl = buildApiUrl(id, s, e);
+        const apiData = await proxyFetch(apiUrl, true, absoluteBase);
+        if (!apiData?.src) return null;
+        const embedUrl = apiData.src.startsWith('http') ? apiData.src : BASE_URL + apiData.src;
+        const html = await proxyFetch(embedUrl, false, absoluteBase);
+        if (!html) return null;
+        const tokenData = extractTokenData(html);
+        if (!tokenData) return null;
+        const masterUrl = buildMasterUrl(tokenData);
+        const playlistText = await proxyFetch(masterUrl, false, absoluteBase);
+        if (!playlistText) return null;
+        const cleaned = playlistText.trim();
+        if (!cleaned.startsWith('#EXTM3U')) return null;
+        const variantUrl = getBestVariantUrl(cleaned, masterUrl);
+        const finalUrl = variantUrl ?? masterUrl;
+        return { url: finalUrl, headers: HEADERS, skipProxy: false };
+    } catch { return null; }
 }
