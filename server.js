@@ -672,7 +672,7 @@ async function handleTestSource(sourceKey, id, s, e, clientIP, host) {
                     }
                     if (/timeout|aborted/i.test(playableCheck.error ?? '')) {
                         const result = { ok: true, url: wrappedUrl, raw_url: candidate.url };
-                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 15000); } // short TTL on uncertain results
+                        if (!rawResult?.skipCache) { testResultCache.set(cacheKey, result); sharedCacheSet(cacheKey, result, 15000); }
                         return result;
                     }
                     try {
