@@ -40,8 +40,7 @@ function buildSearchKeywords(titles) {
     return [...keywords];
 }
 
-async function resolveSlug(id, s, e) {
-    const info = await getTmdbInfo(id, s ? 'tv' : 'movie', s || null);
+async function resolveSlug(id, s, e, info) {
     const titles = info.titles || [];
     const keywords = buildSearchKeywords(titles);
 
@@ -118,6 +117,9 @@ async function extractEchoSources(embedUrl) {
 }
 
 export async function getStream({ id, s, e }) {
+    if (!s) return null;
+    const info = await getTmdbInfo(id, 'tv', s);
+    if (!info.isAnime) return null;
     const resolved = await resolveSlug(id, s, e);
     if (!resolved) return null;
     const { eprData } = resolved;
