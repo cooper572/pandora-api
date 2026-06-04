@@ -507,6 +507,51 @@ export const SOURCES = [
         skipProxy: true,
         skipVerify: true,
     },
+
+    {
+        key: 'animehub',
+        label: 'AnimeHub',
+        sourceFile: 'animehub',
+        proxyParam: 'ah',
+        timeout: 25000,
+        jitter: 500,
+        retries: 2,
+        skipVerify: true,
+        multiUrl: false,
+        cdnHeaders: [
+            {
+                pattern: /hlsx\d+cdn\.|burntburst\d+\.store|echovideo\.ru/i,
+                headers: {
+                    Referer: 'https://play2.echovideo.ru/',
+                    Origin: 'https://play2.echovideo.ru',
+                },
+            },
+        ],
+    },
+    
+    {
+        key: 'kiroku-sub',
+        label: 'Kiroku (Sub)',
+        sourceFile: 'kiroku',
+        proxyParam: 'krsub',
+        timeout: 25000,
+        jitter: 300,
+        retries: 2,
+        skipProxy: true,
+        skipVerify: true,
+    },
+
+    {
+        key: 'kiroku-dub',
+        label: 'Kiroku (Dub)',
+        sourceFile: 'kiroku',
+        proxyParam: 'krdub',
+        timeout: 25000,
+        jitter: 300,
+        retries: 2,
+        skipProxy: true,
+        skipVerify: true,
+    },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));
