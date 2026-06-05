@@ -162,23 +162,13 @@ export const SOURCES = [
         retries: 2,
         skipVerify: false,
         multiUrl: false,
+        disabled: true, // Temporarily disabled due to IP blocking occuring on HF
         verifyHeaders: {
             Accept: 'application/json, text/javascript, /; q=0.01',
             'Accept-Language': 'en-US,en;q=0.9',
             Referer: 'https://vixsrc.to/',
             Origin: 'https://vixsrc.to',
         },
-    },
-
-    {
-        key: '02movie',
-        label: '02Movie',
-        sourceFile: '02movie',
-        proxyParam: 'zm',
-        timeout: 35000,
-        jitter: 600,
-        retries: 1,
-        skipVerify: true,
     },
 
     {
@@ -276,7 +266,7 @@ export const SOURCES = [
         timeout: 20000,
         jitter: 500,
         retries: 2,
-        disabled: true,
+        disabled: true, // Temporarily disabled due to them being down.
         skipVerify: true,
     },
 
@@ -307,6 +297,7 @@ export const SOURCES = [
         retries: 2,
         skipVerify: true,
         multiUrl: true,
+        disabled: true, // Temporarily disabled due to them being unreliable.
         verifyHeaders: {
             Referer: 'https://brightpathsignals.com/',
             Origin: 'https://brightpathsignals.com',
@@ -337,6 +328,7 @@ export const SOURCES = [
         skipProxy: true,
         skipVerify: true,
         multiUrl: true,
+        disabled: true, // Temporarily disabled due to them being unreliable.
         verifyHeaders: {
             'Accept-Language': 'en-US,en;q=0.9',
         },
@@ -368,17 +360,6 @@ export const SOURCES = [
         disabled: true,
         skipVerify: true,
         multiUrl: true,
-    },
-
-    {
-        key: 'movsrc',
-        label: 'MovSrc',
-        sourceFile: 'movsrc',
-        proxyParam: 'ms',
-        timeout: 20000,
-        jitter: 500,
-        retries: 2,
-        skipVerify: true,
     },
 
     {
@@ -437,22 +418,6 @@ export const SOURCES = [
     },
 
     {
-        key: 'vidsrc',
-        label: 'VidSrc',
-        sourceFile: 'vidsrc',
-        proxyParam: 'vs',
-        timeout: 20000,
-        sourcesTimeout: 10000,
-        jitter: 700,
-        retries: 2,
-        verifyHeaders: {
-            Referer: 'https://cloudnestra.com/',
-            Origin: 'https://cloudnestra.com',
-            Accept: '/',
-        },
-    },
-
-    {
         key: 'videasy',
         label: 'Videasy',
         sourceFile: 'videasy',
@@ -461,6 +426,7 @@ export const SOURCES = [
         sourcesTimeout: 10000,
         jitter: 900,
         retries: 3,
+        disabled: true, // Temporarily disabled due to IP blocking occuring on HF
         skipVerify: true,
         multiUrl: false,
         verifyHeaders: {
@@ -478,6 +444,7 @@ export const SOURCES = [
         timeout: 30000,
         jitter: 500,
         retries: 2,
+        disabled: true, // Temporarily disabled due to IP blocking occuring on HF
         skipVerify: true,
     },
 
@@ -550,6 +517,16 @@ export const SOURCES = [
         timeout: 25000,
         jitter: 300,
         retries: 2,
+        skipProxy: true,
+        skipVerify: true,
+    },
+
+    {
+        key: 'trendimovies',
+        label: 'TrendiMovies',
+        sourceFile: 'trendimovies',
+        timeout: 15000,
+        retries: 1,
         skipProxy: true,
         skipVerify: true,
     },

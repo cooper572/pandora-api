@@ -14,7 +14,7 @@ import { Readable } from 'stream';
 dotenv.config();
 
 const rateLimitMap = new Map();
-const BLOCKED_IPS = new Set(['45.150.110.57']);
+const BLOCKED_IPS = new Set(['// who\'s is gonna be blocked']);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -762,23 +762,6 @@ const rateLimitCleanupInterval = setInterval(() => {
 }, 30000);
 rateLimitCleanupInterval.unref?.();
 
-const FALLBACK_SUB_BASES = ['https://subs.vidsrc.cc', 'https://vidsrc.cc', 'https://api.vidsrc.cc'];
-async function getFastSubs(id, s, e) {
-    const bases = [...new Set([...(SUBTITLE_BASES || []), ...FALLBACK_SUB_BASES])].filter(Boolean);
-    const paths = s ? [`/tv/${id}/${s}/${e}`, `/tv/tt${id}/${s}/${e}`] : [`/movie/${id}`, `/movie/tt${id}`];
-    const urls = [];
-    for (const b of bases) for (const p of paths) urls.push(`${b}${p}`);
-    try {
-        return await Promise.any(urls.map(async u => {
-            const r = await _originalFetch(u, { signal: AbortSignal.timeout(4000) });
-            if (!r.ok) throw new Error();
-            const data = await r.json();
-            if (Array.isArray(data) && data.length > 0) return data;
-            throw new Error();
-        }));
-    } catch { return []; }
-}
-
 async function handleRequest(req, res) {
     const baseUrl = `http://${req.headers.host || 'localhost'}`;
     const reqUrl = new URL(req.url, baseUrl);
@@ -814,7 +797,7 @@ async function handleRequest(req, res) {
         if (!id) return respondJson(400, { error: 'missing id', route: '/movie?id=:tmdb_id', example: '/movie?id=155' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
-        const [meta, subtitles] = await Promise.all([getMetadata(id, null, null), getFastSubs(id, null, null)]);
+        const [meta, subtitles] = await Promise.all([getMetadata(id, null, null)]);
         if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; } }
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
         const sourcesToUse = requestedSources.length ? ACTIVE_SOURCES.filter(s => requestedSources.includes(s.key)) : ACTIVE_SOURCES;
@@ -829,7 +812,7 @@ async function handleRequest(req, res) {
         if (!id || !s || !e) return respondJson(400, { error: 'missing parameters', route: '/tv?id=:id&season=:s&episode=:e', example: '/tv?id=1396&season=1&episode=1' });
         const absoluteBase = getAbsoluteBase(reqUrl.host);
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no', ...CORS_HEADERS });
-        const [meta, subtitles] = await Promise.all([getMetadata(id, s, e), getFastSubs(id, s, e)]);
+        const [meta, subtitles] = await Promise.all([getMetadata(id, s, e)]);
         if (!res.writableEnded && !res.destroyed) { try { res.write(`data: ${JSON.stringify({ type: 'meta', meta, subtitles: subtitles || [] })}\n\n`); } catch { return null; } }
         const requestedSources = searchParams.get('sources')?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
         const sourcesToUse = requestedSources.length ? ACTIVE_SOURCES.filter(src => requestedSources.includes(src.key)) : ACTIVE_SOURCES;
@@ -843,9 +826,9 @@ async function handleRequest(req, res) {
     if (pathname === '/download' || pathname === '/downloads' || pathname === '/api/download' || pathname === '/api/downloads') return respondJson(200, { routes: { movie: '/downloads/movie/:id', tv: '/downloads/tv/:id/:s/:e' }, examples: { movie: '/downloads/movie/155', tv: '/downloads/tv/1396/1/1' } });
 
     let match = ROUTE_TESTS.subtitle_movie.exec(pathname);
-    if (match) { posthogTrack('subtitles-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }); const fastSubs = await getFastSubs(match[1], null, null); if (fastSubs.length > 0) return respondJson(200, fastSubs); return handleSubtitleMovie(match[1], CORS_HEADERS); }
+    if (match) { posthogTrack('subtitles-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }); return handleSubtitleMovie(match[1], CORS_HEADERS); }
     match = ROUTE_TESTS.subtitle_tv.exec(pathname);
-    if (match) { posthogTrack('subtitles-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) }); const fastSubs = await getFastSubs(match[1], match[2], match[3]); if (fastSubs.length > 0) return respondJson(200, fastSubs); return handleSubtitleTv(match[1], match[2], match[3], CORS_HEADERS); }
+    if (match) { posthogTrack('subtitles-tv', { id: match[1], season: match[2], episode: match[3], ...getRequestMeta(req, reqUrl) }); return handleSubtitleTv(match[1], match[2], match[3], CORS_HEADERS); }
     match = ROUTE_TESTS.download_movie.exec(pathname);
     if (match) { posthogTrack('downloads-movie', { id: match[1], ...getRequestMeta(req, reqUrl) }, clientIP); return handleDownloadMovie(match[1], CORS_HEADERS); }
     match = ROUTE_TESTS.download_tv.exec(pathname);
