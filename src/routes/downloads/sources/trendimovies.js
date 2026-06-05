@@ -61,11 +61,3 @@ export async function getDownloadsTv(tmdbId, season, episode) {
     const html = await fetchPage(`/tv/${tmdbId}/season/${season}/episode/${episode}`);
     return parseLinks(html);
 }
-
-export async function getStream({ id, s, e }) {
-    const results = s ? await getDownloadsTv(id, s, e) : await getDownloads(id);
-    if (!results.length) return null;
-    return { allUrls: results.map(r => ({ url: r.url, skipProxy: true, skipHlsCheck: true })) };
-}
-
-export default getStream;

@@ -520,16 +520,6 @@ export const SOURCES = [
         skipProxy: true,
         skipVerify: true,
     },
-
-    {
-        key: 'trendimovies',
-        label: 'TrendiMovies',
-        sourceFile: 'trendimovies',
-        timeout: 15000,
-        retries: 1,
-        skipProxy: true,
-        skipVerify: true,
-    },
 ];
 
 export const SOURCE_MAP = Object.fromEntries(SOURCES.map(s => [s.key, s]));

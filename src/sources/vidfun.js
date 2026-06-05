@@ -14,7 +14,7 @@ async function getWasm() {
     if (wasmExports) return wasmExports;
     if (wasmLoading) return wasmLoading;
     wasmLoading = (async () => {
-        const wasmPath = join(__dirname, '../../extensions/vidfun.wasm');
+        const wasmPath = join(__dirname, '../../utils/vidfun.wasm');
         try {
             const wasmBuffer = await readFile(wasmPath);
             const memory = { current: null };

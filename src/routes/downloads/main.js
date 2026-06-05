@@ -1,8 +1,8 @@
-import { getDownloads as getTrendiDownloads } from '../sources/trendimovies.js';
+import { getDownloads as getTrendiDownloads, getDownloadsTv as getTrendiDownloadsTv } from './sources/trendimovies.js';
 
 async function mergeDownloads(tmdbId, season, episode) {
     const [sTrendi] = await Promise.allSettled([
-        getTrendiDownloads(tmdbId, season, episode),
+        season ? getTrendiDownloadsTv(tmdbId, season, episode) : getTrendiDownloads(tmdbId),
     ]);
     return [
         ...(sTrendi.status === 'fulfilled' ? sTrendi.value : []),

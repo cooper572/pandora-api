@@ -27,8 +27,8 @@ function bootWasm() {
         await sodium.ready;
         globalThis.sodium = sodium;
 
-        const scriptPath = join(process.cwd(), 'src', 'extensions', 'script.js');
-        const wasmPath = join(process.cwd(), 'src', 'extensions', 'fu.wasm');
+        const scriptPath = join(process.cwd(), 'src', 'utils', 'script.js');
+        const wasmPath = join(process.cwd(), 'src', 'utils', 'fu.wasm');
 
         const scriptSrc = readFileSync(scriptPath, 'utf8');
         eval(scriptSrc);
