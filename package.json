@@ -6,7 +6,9 @@
     "type": "module",
     "scripts": {
         "start": "node --experimental-wasm-gc server.js",
-        "dev": "node --experimental-wasm-gc server.js"
+        "dev": "node --experimental-wasm-gc server.js",
+        "worker:dev": "wrangler dev",
+        "worker:deploy": "wrangler deploy"
     },
     "dependencies": {
         "crypto-js": "^4.2.0",
@@ -15,6 +17,7 @@
         "posthog-node": "^5.35.6",
         "socks-proxy-agent": "^10.0.0",
         "tweetnacl": "^1.0.3",
-        "undici": "^6.25.0"
+        "undici": "^6.25.0",
+        "wrangler": "^4.23.0"
     }
 }
